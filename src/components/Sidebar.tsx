@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
-import Image from "next/image";
 import {
   LayoutDashboard,
   KeyRound,

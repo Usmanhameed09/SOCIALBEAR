@@ -80,6 +80,15 @@ async function handleModeration(data) {
     }
 
     const result = await response.json();
+    try {
+      console.log(
+        "[SproutMod] Moderate result:",
+        "flagged=", !!result.flagged,
+        "action=", result.action,
+        "category=", result.highest_category || "",
+        "score=", result.highest_score || result.confidence || 0
+      );
+    } catch (_) {}
     return { success: true, data: result };
   } catch (err) {
     console.error("[SproutMod] Moderation error:", err);

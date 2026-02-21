@@ -586,14 +586,20 @@
         if (result.flagged) {
           var cat = result.highest_category || "flagged";
           var conf = result.confidence || 0.5;
-          console.log("[SproutMod] AI FLAGGED:", cat, Math.round(conf * 100) + "%", guid);
+          console.log("[SproutMod] AI FLAGGED:", cat, Math.round(conf * 100) + "%", guid, "action:", result.action);
           addBadge(row, cat, conf, false);
           stats.flagged++;
 
           var aiShouldHide = result.action === "hide";
+          console.log("[SproutMod] AI decision:", "flagged=", !!result.flagged, "action=", result.action, "hide=", aiShouldHide);
           if (aiShouldHide) {
             var didHide = await hideWithRetry(row);
-            if (didHide) stats.hidden++;
+            if (didHide) {
+              stats.hidden++;
+              console.log("[SproutMod] AI HIDE success:", guid);
+            } else {
+              console.warn("[SproutMod] AI HIDE failed:", guid);
+            }
             await sleep(300);
           }
 
@@ -622,7 +628,7 @@
             });
           } catch (_) {}
         } else {
-          console.log("[SproutMod] Clean:", guid);
+          console.log("[SproutMod] Clean:", guid, "action:", result && result.action);
           row.setAttribute(PROCESSED_ATTR, "done-clean");
           recordAction(guid, { action: "clean" });
         }
