@@ -10,6 +10,7 @@ import {
   Filter,
   ChevronLeft,
   ChevronRight,
+  Download,
 } from "lucide-react";
 import { format } from "date-fns";
 import clsx from "clsx";
@@ -21,6 +22,7 @@ const PAGE_SIZE = 20;
 export default function LogsPage() {
   const [logs, setLogs] = useState<ModerationLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const [platform, setPlatform] = useState("all");
   const [action, setAction] = useState("all");
@@ -63,6 +65,67 @@ export default function LogsPage() {
     setPage(0);
   }, [platform, action, search]);
 
+  const exportToCSV = useCallback(async () => {
+    setExporting(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Fetch ALL matching logs (no pagination)
+      let query = supabase
+        .from("moderation_logs")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (platform !== "all") query = query.eq("platform", platform);
+      if (action !== "all") query = query.eq("action_taken", action);
+      if (search) query = query.ilike("message_text", `%${search}%`);
+
+      const { data } = await query;
+      if (!data || data.length === 0) return;
+
+      const columns: (keyof ModerationLog)[] = [
+        "id",
+        "created_at",
+        "message_text",
+        "platform",
+        "confidence",
+        "matched_keyword",
+        "rule_triggered",
+        "action_taken",
+      ];
+
+      const escapeCell = (val: unknown): string => {
+        if (val === null || val === undefined) return "";
+        const str = String(val);
+        // Wrap in quotes if contains comma, quote, or newline
+        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const header = columns.join(",");
+      const rows = data.map((row) =>
+        columns.map((col) => escapeCell(row[col])).join(",")
+      );
+      const csv = [header, ...rows].join("\n");
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `moderation_logs_${format(new Date(), "yyyy-MM-dd_HH-mm")}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  }, [supabase, platform, action, search]);
+
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
   const actionColors: Record<string, string> = {
@@ -84,12 +147,22 @@ export default function LogsPage() {
             {total} total entries
           </p>
         </div>
-        <button
-          onClick={fetchLogs}
-          className="p-2 hover:bg-surface-100 rounded-lg text-surface-400 hover:text-surface-600 transition-colors"
-        >
-          <RefreshCw className={clsx("w-4 h-4", loading && "animate-spin")} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportToCSV}
+            disabled={exporting || total === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Download className={clsx("w-4 h-4", exporting && "animate-bounce")} />
+            {exporting ? "Exporting…" : "Export CSV"}
+          </button>
+          <button
+            onClick={fetchLogs}
+            className="p-2 hover:bg-surface-100 rounded-lg text-surface-400 hover:text-surface-600 transition-colors"
+          >
+            <RefreshCw className={clsx("w-4 h-4", loading && "animate-spin")} />
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
