@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
+import Image from "next/image";
+import BearLogo from "@/img/Bear_logo.png";
 import {
   LayoutDashboard,
   KeyRound,
@@ -38,7 +40,13 @@ export default function Sidebar() {
       <div className="px-6 py-6 border-b border-white/20">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center">
-            <img src="/img/Bear_logo.png" alt="Socialbear" width={20} height={20} className="w-5 h-5" />
+            <Image
+              src={BearLogo}
+              alt="Socialbear"
+              width={20}
+              height={20}
+              className="w-5 h-5"
+            />
           </div>
           <div>
             <h2 className="text-white font-bold text-sm tracking-tight">
