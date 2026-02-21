@@ -1,0 +1,75 @@
+/* Sprout Moderation — Content Script Styles v3 */
+
+.sproutmod-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 99999;
+  pointer-events: none;
+  animation: sproutmod-fadeIn 0.3s ease-out;
+}
+
+.sproutmod-badge-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.sproutmod-badge-icon {
+  font-size: 13px;
+}
+
+.sproutmod-badge-label {
+  text-transform: capitalize;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sproutmod-badge-conf {
+  opacity: 0.85;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: "SF Mono", "Consolas", "Courier New", monospace;
+}
+
+/* HIGH severity — red */
+.sproutmod-high {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1.5px solid #fca5a5;
+}
+
+/* MEDIUM severity — orange */
+.sproutmod-medium {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1.5px solid #fde68a;
+}
+
+/* LOW severity — green */
+.sproutmod-low {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1.5px solid #86efac;
+}
+
+/* Animation */
+@keyframes sproutmod-fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

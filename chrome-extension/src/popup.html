@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Socialbear AI</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+    }
+    .header {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: rgba(47,163,248,0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+    .header h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+    .header p { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+
+    .section { padding: 16px 20px; }
+    .section + .section { border-top: 1px solid rgba(255,255,255,0.06); }
+
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    input[type="text"], input[type="password"], input[type="url"] {
+      width: 100%;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      color: #f8fafc;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus { border-color: #2FA3F8; }
+    input::placeholder { color: #475569; }
+
+    .field + .field { margin-top: 12px; }
+
+    .btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-top: 14px;
+    }
+    .btn-primary {
+      background: #2FA3F8;
+      color: white;
+    }
+    .btn-primary:hover { background: #1C88D8; }
+    .btn-secondary {
+      background: rgba(255,255,255,0.06);
+      color: #cbd5e1;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: rgba(47,163,248,0.12);
+      border-radius: 10px;
+      font-size: 12px;
+      color: #2FA3F8;
+    }
+    .status-bar.error { background: rgba(239,68,68,0.08); color: #ef4444; }
+    .status-bar.warning { background: rgba(245,158,11,0.08); color: #f59e0b; }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .stat-item {
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .stat-value { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+    .stat-label { font-size: 10px; color: #64748b; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value.green { color: #2FA3F8; }
+    .stat-value.red { color: #ef4444; }
+    .stat-value.orange { color: #f59e0b; }
+    .stat-value.blue { color: #2FA3F8; }
+
+    #login-view, #main-view { display: none; }
+    #login-view.active, #main-view.active { display: block; }
+
+    .error-msg { color: #ef4444; font-size: 12px; margin-top: 8px; display: none; }
+    .error-msg.show { display: block; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-icon">🛡️</div>
+    <div>
+      <h1>Socialbear AI</h1>
+      <p>AI Copilot</p>
+    </div>
+  </div>
+
+  <!-- LOGIN VIEW -->
+  <div id="login-view">
+    <div class="section">
+      <div class="field">
+        <label>Admin Panel URL</label>
+        <input type="url" id="apiUrl" placeholder="https://your-app.vercel.app" />
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="text" id="email" placeholder="you@company.com" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="password" placeholder="••••••••" />
+      </div>
+      <div class="error-msg" id="login-error"></div>
+      <button class="btn btn-primary" id="login-btn">Connect</button>
+    </div>
+  </div>
+
+  <!-- MAIN VIEW -->
+  <div id="main-view">
+    <div class="section">
+      <div id="status-container"></div>
+    </div>
+
+    <div class="section">
+      <label>Live Stats</label>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value blue" id="stat-scanned">0</div>
+          <div class="stat-label">Scanned</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value orange" id="stat-flagged">0</div>
+          <div class="stat-label">Flagged</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value red" id="stat-hidden">0</div>
+          <div class="stat-label">Hidden</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value green" id="stat-last-scan">—</div>
+          <div class="stat-label">Last Scan</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <button class="btn btn-primary" id="rescan-btn">🔄 Rescan Inbox</button>
+      <button class="btn btn-secondary" id="disconnect-btn">Disconnect</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
