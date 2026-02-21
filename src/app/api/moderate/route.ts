@@ -178,10 +178,11 @@ export async function POST(req: NextRequest) {
       try {
         const modResponse = await openai.moderations.create({ input: message_text });
         const result = modResponse.results[0];
-        const scores = result.category_scores as Record<string, number>;
+        const scores = result.category_scores;
         let highestScore = 0;
         let highestCat = "";
-        for (const [cat, score] of Object.entries(scores)) {
+        for (const cat in scores) {
+          const score = scores[cat as keyof typeof scores] ?? 0;
           if (score > highestScore) {
             highestScore = score;
             highestCat = cat;
