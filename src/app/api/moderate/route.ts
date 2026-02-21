@@ -192,7 +192,9 @@ export async function POST(req: NextRequest) {
           flagged: highestScore >= config.confidence_threshold,
           highest_category: highestCat,
           highest_score: highestScore,
-          scores,
+          scores: Object.fromEntries(
+            Object.entries(scores).map(([k, v]) => [k, v ?? 0])
+          ),
           reason: "Fallback to basic moderation API",
         };
       } catch (fallbackErr) {
