@@ -36,6 +36,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  // ─── NEW: Fetch last_checked_timestamp from server ───
+  if (message.type === "GET_LAST_TIMESTAMP") {
+    handleGetLastTimestamp().then(sendResponse);
+    return true;
+  }
+
+  // ─── NEW: Save last_checked_timestamp to server ───
+  if (message.type === "SAVE_LAST_TIMESTAMP") {
+    handleSaveLastTimestamp(message.data).then(sendResponse);
+    return true;
+  }
 });
 
 async function getAuthHeaders() {
@@ -207,6 +219,56 @@ async function handleUpdateCounters(data) {
     console.log("[SproutMod] Counters API success");
     return { success: true };
   } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ─── NEW: Fetch last_checked_timestamp from moderation_counters ───
+async function handleGetLastTimestamp() {
+  try {
+    const baseUrl = await getBaseUrl();
+    const headers = await getAuthHeaders();
+
+    const response = await fetch(`${baseUrl}/api/counters/last-timestamp`, {
+      method: "GET",
+      headers,
+    });
+
+    if (!response.ok) {
+      console.warn("[SproutMod] Failed to fetch last_checked_timestamp, HTTP", response.status);
+      return { success: false, error: "HTTP " + response.status };
+    }
+
+    const result = await response.json();
+    console.log("[SproutMod] Fetched last_checked_timestamp:", result.last_checked_timestamp);
+    return { success: true, last_checked_timestamp: result.last_checked_timestamp || 0 };
+  } catch (err) {
+    console.error("[SproutMod] Error fetching last_checked_timestamp:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+// ─── NEW: Save last_checked_timestamp to moderation_counters ───
+async function handleSaveLastTimestamp(data) {
+  try {
+    const baseUrl = await getBaseUrl();
+    const headers = await getAuthHeaders();
+
+    const response = await fetch(`${baseUrl}/api/counters/last-timestamp`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ last_checked_timestamp: data.last_checked_timestamp }),
+    });
+
+    if (!response.ok) {
+      console.warn("[SproutMod] Failed to save last_checked_timestamp, HTTP", response.status);
+      return { success: false, error: "HTTP " + response.status };
+    }
+
+    console.log("[SproutMod] Saved last_checked_timestamp:", data.last_checked_timestamp);
+    return { success: true };
+  } catch (err) {
+    console.error("[SproutMod] Error saving last_checked_timestamp:", err);
     return { success: false, error: err.message };
   }
 }

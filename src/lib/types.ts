@@ -64,6 +64,7 @@ export interface ModerationCounters {
   flagged: number;
   auto_hidden: number;
   completed: number;
+  last_checked_timestamp: number;
   updated_at: string;
 }
 
