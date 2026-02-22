@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { Shield, Eye, EyeOff, Loader2, MailCheck } from "lucide-react";
 
 // ✅ Change this to your production URL
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://yourdomain.com";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://socialbear.vercel.app";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -32,7 +32,7 @@ export default function LoginPage() {
           email,
           password,
           options: {
-            emailRedirectTo: `${SITE_URL}/auth/callback`,
+            emailRedirectTo: `${SITE_URL}`,
           },
         });
         if (error) throw error;

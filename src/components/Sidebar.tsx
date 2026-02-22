@@ -12,6 +12,7 @@ import {
   ScrollText,
   LogOut,
   Layers,
+  User,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -21,6 +22,7 @@ const navItems = [
   { href: "/dashboard/keywords", label: "Keywords", icon: KeyRound },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
   { href: "/dashboard/logs", label: "Moderation Logs", icon: ScrollText },
+  { href: "/dashboard/profile", label: "Profile", icon: User },
 ];
 
 export default function Sidebar() {

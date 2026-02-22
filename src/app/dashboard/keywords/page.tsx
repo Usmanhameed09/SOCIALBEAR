@@ -13,6 +13,7 @@ import {
   Tag,
   CheckCircle2,
   X,
+  Edit2,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -53,6 +54,7 @@ export default function KeywordsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  const [editingKeyword, setEditingKeyword] = useState<KeywordRule | null>(null);
   const [newKeyword, setNewKeyword] = useState("");
   const [selectedActions, setSelectedActions] = useState<ActionType[]>([
     "badge_only",
@@ -104,25 +106,59 @@ export default function KeywordsPage() {
     // Using a sorted joined string for the "action" column
     const actionValue = selectedActions.sort().join(",");
 
-    const { error } = await supabase.from("keyword_rules").insert({
-      user_id: user.id,
-      keyword: newKeyword.trim().toLowerCase(),
-      action: actionValue,
-      is_active: true,
-    });
+    if (editingKeyword) {
+      const { error } = await supabase
+        .from("keyword_rules")
+        .update({
+          keyword: newKeyword.trim().toLowerCase(),
+          action: actionValue,
+        })
+        .eq("id", editingKeyword.id);
 
-    if (!error) {
-      setNewKeyword("");
-      setSelectedActions(["badge_only"]);
-      setShowAdd(false);
-      fetchKeywords();
+      if (!error) {
+        setEditingKeyword(null);
+        setNewKeyword("");
+        setSelectedActions(["badge_only"]);
+        setShowAdd(false);
+        fetchKeywords();
+      }
+    } else {
+      const { error } = await supabase.from("keyword_rules").insert({
+        user_id: user.id,
+        keyword: newKeyword.trim().toLowerCase(),
+        action: actionValue,
+        is_active: true,
+      });
+
+      if (!error) {
+        setNewKeyword("");
+        setSelectedActions(["badge_only"]);
+        setShowAdd(false);
+        fetchKeywords();
+      }
     }
     setSaving(false);
   };
 
+  const startEditing = (keyword: KeywordRule) => {
+    setEditingKeyword(keyword);
+    setNewKeyword(keyword.keyword);
+    setSelectedActions(parseActions(keyword.action));
+    setShowAdd(true);
+  };
+
   const deleteKeyword = async (id: string) => {
-    await supabase.from("keyword_rules").delete().eq("id", id);
-    setKeywords((prev) => prev.filter((k) => k.id !== id));
+    if (confirm("Are you sure you want to delete this keyword rule?")) {
+      await supabase.from("keyword_rules").delete().eq("id", id);
+      setKeywords((prev) => prev.filter((k) => k.id !== id));
+    }
+  };
+
+  const handleCloseModal = () => {
+    setShowAdd(false);
+    setEditingKeyword(null);
+    setNewKeyword("");
+    setSelectedActions(["badge_only"]);
   };
 
   const toggleActive = async (id: string, currentState: boolean) => {
@@ -179,10 +215,10 @@ export default function KeywordsPage() {
           <div className="bg-white rounded-2xl border border-surface-200 p-6 w-full max-w-md shadow-2xl animate-slide-up">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-bold text-surface-900">
-                Add Keyword Rule
+                {editingKeyword ? "Edit Keyword Rule" : "Add Keyword Rule"}
               </h3>
               <button
-                onClick={() => setShowAdd(false)}
+                onClick={handleCloseModal}
                 className="p-1.5 hover:bg-surface-100 rounded-lg text-surface-400"
               >
                 <X className="w-5 h-5" />
@@ -250,7 +286,7 @@ export default function KeywordsPage() {
                 disabled={!newKeyword.trim() || selectedActions.length === 0 || saving}
                 className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white font-medium rounded-xl text-sm transition-colors"
               >
-                {saving ? "Adding..." : "Add Rule"}
+                {saving ? (editingKeyword ? "Updating..." : "Adding...") : (editingKeyword ? "Update Rule" : "Add Rule")}
               </button>
             </div>
           </div>
@@ -335,12 +371,20 @@ export default function KeywordsPage() {
                   })}
 
                   {/* Delete */}
-                  <button
-                    onClick={() => deleteKeyword(rule.id)}
-                    className="p-1.5 hover:bg-danger-50 rounded-lg text-surface-400 hover:text-danger-500 transition-colors ml-1"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => startEditing(rule)}
+                      className="p-1.5 hover:bg-surface-100 rounded-lg text-surface-400 hover:text-brand-600 transition-colors"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteKeyword(rule.id)}
+                      className="p-1.5 hover:bg-danger-50 rounded-lg text-surface-400 hover:text-danger-500 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             );

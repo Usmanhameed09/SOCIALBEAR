@@ -1,5 +1,3 @@
-
-
 // Open side panel on icon click
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -104,24 +102,65 @@ async function handleFetchConfig() {
     const response = await fetch(`${baseUrl}/api/config`, { headers });
 
     if (!response.ok) {
-      return { success: false, error: "Failed to fetch config" };
+      let errText = "Failed to fetch config";
+      try {
+        const ejson = await response.json();
+        errText = ejson && ejson.error ? ejson.error : errText;
+      } catch (_) {
+        try {
+          errText = await response.text();
+        } catch (_) {}
+      }
+      try {
+        var t = (headers.Authorization || "").replace("Bearer ", "");
+        var uid = "default";
+        if (t) { var p = JSON.parse(atob(t.split(".")[1])); uid = p.sub || "default"; }
+        return new Promise((resolve) => {
+          chrome.storage.local.get(["cachedConfig_" + uid], (data) => {
+            if (data["cachedConfig_" + uid]) {
+              console.warn("[SproutMod] Using cached config (HTTP " + response.status + ")");
+              resolve({ success: true, data: data["cachedConfig_" + uid], cached: true });
+            } else {
+              resolve({ success: false, error: errText });
+            }
+          });
+        });
+      } catch (_) {
+        return { success: false, error: errText };
+      }
     }
 
     const config = await response.json();
-    // Cache config locally
-    chrome.storage.local.set({ cachedConfig: config, configUpdatedAt: Date.now() });
+
+    // Cache per-user as fallback only
+    try {
+      var t = (headers.Authorization || "").replace("Bearer ", "");
+      var uid = "default";
+      if (t) { var p = JSON.parse(atob(t.split(".")[1])); uid = p.sub || "default"; }
+      chrome.storage.local.set({ ["cachedConfig_" + uid]: config });
+    } catch (_) {}
+
     return { success: true, data: config };
   } catch (err) {
-    // Return cached config if available
-    return new Promise((resolve) => {
-      chrome.storage.local.get(["cachedConfig"], (data) => {
-        if (data.cachedConfig) {
-          resolve({ success: true, data: data.cachedConfig, cached: true });
-        } else {
-          resolve({ success: false, error: err.message });
-        }
+    // Network error - use cached config
+    try {
+      var h = await getAuthHeaders();
+      var t2 = (h.Authorization || "").replace("Bearer ", "");
+      var uid2 = "default";
+      if (t2) { var p2 = JSON.parse(atob(t2.split(".")[1])); uid2 = p2.sub || "default"; }
+      return new Promise((resolve) => {
+        chrome.storage.local.get(["cachedConfig_" + uid2], (data) => {
+          if (data["cachedConfig_" + uid2]) {
+            console.warn("[SproutMod] Using cached config (network error)");
+            resolve({ success: true, data: data["cachedConfig_" + uid2], cached: true });
+          } else {
+            resolve({ success: false, error: err.message });
+          }
+        });
       });
-    });
+    } catch (_) {
+      return { success: false, error: err.message };
+    }
   }
 }
 
