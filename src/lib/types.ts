@@ -9,6 +9,8 @@ export interface ModerationConfig {
   ai_model: string;
   created_at: string;
   updated_at: string;
+  auto_complete_enabled?: boolean;
+
 }
 
 export interface ModerationCategory {
