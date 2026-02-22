@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { key, label, description, is_active, sort_order } = body;
+    const { key, label, description, is_active, sort_order, confidence_threshold } = body;
 
     if (!key || !label) {
       return NextResponse.json({ error: "key and label required" }, { status: 400 });
@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
         description: description || "",
         is_active: is_active !== false,
         sort_order: sort_order || 99,
+        confidence_threshold: confidence_threshold || 0.8,
       })
       .select()
       .single();
@@ -77,7 +78,7 @@ export async function PUT(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { id, label, description, is_active, sort_order } = body;
+    const { id, label, description, is_active, sort_order, confidence_threshold } = body;
 
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
@@ -87,6 +88,7 @@ export async function PUT(req: NextRequest) {
     if (description !== undefined) update.description = description;
     if (is_active !== undefined) update.is_active = is_active;
     if (sort_order !== undefined) update.sort_order = sort_order;
+    if (confidence_threshold !== undefined) update.confidence_threshold = confidence_threshold;
 
     const { data, error } = await supabase
       .from("moderation_categories")

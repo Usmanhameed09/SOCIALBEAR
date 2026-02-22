@@ -261,7 +261,7 @@ export default function SettingsPage() {
         </div>
 
         {/* ========== CONFIDENCE THRESHOLD ========== */}
-        <div className="bg-white rounded-2xl border border-surface-200/80 p-6">
+        {/* <div className="bg-white rounded-2xl border border-surface-200/80 p-6">
           <h3 className="text-sm font-semibold text-surface-900 mb-1">Confidence Threshold</h3>
           <p className="text-xs text-surface-400 mb-4">
             AI-flagged messages scoring above this will trigger the actions above.
@@ -287,7 +287,7 @@ export default function SettingsPage() {
             <span>Balanced (50%)</span>
             <span>Strict (100%)</span>
           </div>
-        </div>
+        </div> */}
 
         {/* ========== CATEGORIES ========== */}
         <div className="bg-white rounded-2xl border border-surface-200/80 p-6">

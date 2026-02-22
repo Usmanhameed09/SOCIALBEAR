@@ -25,6 +25,7 @@ interface Category {
   description: string;
   is_active: boolean;
   sort_order: number;
+  confidence_threshold: number;
 }
 
 const BRAND_GROUPS: Record<string, { label: string; icon: React.ElementType; keys: string[] }> = {
@@ -110,12 +111,24 @@ export default function CategoriesPage() {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ id: cat.id, label: editForm.label, description: editForm.description }),
+      body: JSON.stringify({
+        id: cat.id,
+        label: editForm.label,
+        description: editForm.description,
+        confidence_threshold: editForm.confidence_threshold,
+      }),
     });
 
     setCategories((prev) =>
       prev.map((c) =>
-        c.id === cat.id ? { ...c, label: editForm.label, description: editForm.description } : c
+        c.id === cat.id
+          ? {
+              ...c,
+              label: editForm.label,
+              description: editForm.description,
+              confidence_threshold: editForm.confidence_threshold,
+            }
+          : c
       )
     );
     setEditingId(null);
@@ -152,7 +165,7 @@ export default function CategoriesPage() {
     if (res.ok) {
       const data = await res.json();
       setCategories((prev) => [...prev, data]);
-      setAddForm({ key: "", label: "", description: "" });
+      setAddForm({ key: "", label: "", description: "", confidence_threshold: 0.8 });
       setShowAdd(false);
     }
   }
@@ -351,8 +364,8 @@ function CategoryRow({
   cat: Category;
   saving: string | null;
   editingId: string | null;
-  editForm: { label: string; description: string };
-  setEditForm: (f: { label: string; description: string }) => void;
+  editForm: { label: string; description: string; confidence_threshold: number };
+  setEditForm: (f: { label: string; description: string; confidence_threshold: number }) => void;
   setEditingId: (id: string | null) => void;
   onToggle: () => void;
   onSaveEdit: () => void;
@@ -432,6 +445,9 @@ function CategoryRow({
                 <span className="text-[11px] font-mono text-surface-400 bg-surface-100 px-2 py-0.5 rounded">
                   {cat.key}
                 </span>
+                <span className="text-[10px] text-surface-400 border border-surface-200 px-1.5 py-0.5 rounded">
+                  {cat.confidence_threshold || 0.8}
+                </span>
               </div>
               <p className="text-sm text-surface-500 mt-1 leading-relaxed">{cat.description}</p>
             </>
@@ -444,7 +460,11 @@ function CategoryRow({
             <button
               onClick={() => {
                 setEditingId(cat.id);
-                setEditForm({ label: cat.label, description: cat.description, confidence_threshold: cat.confidence_threshold ?? 0.8 });
+                setEditForm({
+                  label: cat.label,
+                  description: cat.description,
+                  confidence_threshold: cat.confidence_threshold || 0.8,
+                });
               }}
               className="p-2 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-lg transition-colors"
             >

@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
       .eq("is_active", true);
 
     // Fetch active categories with thresholds
-    let activeCategories = [];
+    let activeCategories: { key: string; threshold: number }[] = [];
     try {
       const { data: cats } = await supabase
         .from("moderation_categories")
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       if (cats) {
         activeCategories = cats.map(c => ({
           key: c.key,
-          threshold: c.confidence_threshold ?? config.confidence_threshold
+          threshold: c.confidence_threshold ?? (config?.confidence_threshold ?? 0.8)
         }));
       }
     } catch {

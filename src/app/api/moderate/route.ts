@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
     
     // Check against per-category thresholds
     for (const [key, score] of Object.entries(aiResult.scores)) {
-        const cat = activeCats.find((c: any) => c.key === key);
+        const cat = activeCats.find((c: { key: string; confidence_threshold?: number }) => c.key === key);
         // Default to global config if no specific threshold found
         const threshold = cat?.confidence_threshold ?? config.confidence_threshold;
         
@@ -237,7 +237,7 @@ export async function POST(req: NextRequest) {
         let maxCat = "";
         
         for (const [key, score] of Object.entries(aiResult.scores)) {
-             const cat = activeCats.find((c: any) => c.key === key);
+             const cat = activeCats.find((c: { key: string; confidence_threshold?: number }) => c.key === key);
              const threshold = cat?.confidence_threshold ?? config.confidence_threshold;
              
              if (score >= threshold && score > maxScore) {
