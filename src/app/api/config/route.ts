@@ -27,15 +27,21 @@ export async function GET(req: NextRequest) {
       .eq("user_id", user.id)
       .eq("is_active", true);
 
-    // Fetch active category count
-    let activeCategoryCount = 0;
+    // Fetch active categories with thresholds
+    let activeCategories = [];
     try {
-      const { count } = await supabase
+      const { data: cats } = await supabase
         .from("moderation_categories")
-        .select("*", { count: "exact", head: true })
+        .select("key, confidence_threshold")
         .eq("user_id", user.id)
         .eq("is_active", true);
-      activeCategoryCount = count || 0;
+      
+      if (cats) {
+        activeCategories = cats.map(c => ({
+          key: c.key,
+          threshold: c.confidence_threshold ?? config.confidence_threshold
+        }));
+      }
     } catch {
       // Table may not exist yet
     }
@@ -56,7 +62,7 @@ export async function GET(req: NextRequest) {
       auto_complete_enabled: config.auto_complete_enabled ?? false,
       dry_run_mode: config.dry_run_mode,
       ai_model: config.ai_model || "gpt-4o-mini",
-      active_ai_categories: activeCategoryCount,
+      categories: activeCategories,
     });
   } catch (err) {
     console.error("Config API error:", err);

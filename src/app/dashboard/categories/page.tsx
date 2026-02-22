@@ -55,9 +55,9 @@ export default function CategoriesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ label: "", description: "" });
+  const [editForm, setEditForm] = useState({ label: "", description: "", confidence_threshold: 0.8 });
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ key: "", label: "", description: "" });
+  const [addForm, setAddForm] = useState({ key: "", label: "", description: "", confidence_threshold: 0.8 });
   const supabase = createClient();
 
   const fetchCategories = useCallback(async () => {
@@ -223,6 +223,23 @@ export default function CategoriesPage() {
                 className="w-full border border-surface-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
               />
             </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-surface-500 mb-1">
+                Confidence Threshold ({addForm.confidence_threshold})
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.05"
+                value={addForm.confidence_threshold}
+                onChange={(e) => setAddForm({ ...addForm, confidence_threshold: parseFloat(e.target.value) })}
+                className="w-full accent-brand-500"
+              />
+              <p className="text-[10px] text-surface-400 mt-1">
+                Minimum confidence score (0.0 - 1.0) required to trigger this category.
+              </p>
+            </div>
           </div>
           <div className="mb-4">
             <label className="block text-xs font-medium text-surface-500 mb-1">
@@ -367,12 +384,26 @@ function CategoryRow({
         <div className="flex-1 min-w-0">
           {isEditing ? (
             <div className="space-y-3">
-              <input
-                type="text"
-                value={editForm.label}
-                onChange={(e) => setEditForm({ ...editForm, label: e.target.value })}
-                className="w-full border border-surface-200 rounded-lg px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-brand-500/30"
-              />
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  value={editForm.label}
+                  onChange={(e) => setEditForm({ ...editForm, label: e.target.value })}
+                  className="flex-1 border border-surface-200 rounded-lg px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                />
+                <div className="flex items-center gap-2 bg-surface-50 border border-surface-200 rounded-lg px-3">
+                   <span className="text-xs text-surface-500 font-medium">Threshold:</span>
+                   <input
+                    type="number"
+                    min="0.1"
+                    max="1.0"
+                    step="0.05"
+                    value={editForm.confidence_threshold}
+                    onChange={(e) => setEditForm({ ...editForm, confidence_threshold: parseFloat(e.target.value) })}
+                    className="w-16 bg-transparent text-sm focus:outline-none"
+                   />
+                </div>
+              </div>
               <textarea
                 value={editForm.description}
                 onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
@@ -413,7 +444,7 @@ function CategoryRow({
             <button
               onClick={() => {
                 setEditingId(cat.id);
-                setEditForm({ label: cat.label, description: cat.description });
+                setEditForm({ label: cat.label, description: cat.description, confidence_threshold: cat.confidence_threshold ?? 0.8 });
               }}
               className="p-2 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-lg transition-colors"
             >

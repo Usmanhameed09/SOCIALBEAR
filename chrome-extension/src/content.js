@@ -127,6 +127,16 @@
     parts.push("d:" + !!cfg.dry_run_mode);
     parts.push("t:" + (cfg.threshold || cfg.confidence_threshold || 0.7));
     parts.push("m:" + (cfg.ai_model || ""));
+    
+    if (cfg.categories && cfg.categories.length > 0) {
+      var catParts = cfg.categories.map(function(c) {
+        return c.key + "=" + c.threshold;
+      }).sort();
+      parts.push("cats:" + catParts.join("|"));
+    } else {
+      parts.push("cats:none");
+    }
+
     if (cfg.keywords && cfg.keywords.length > 0) {
       var kwParts = cfg.keywords.map(function (kw) {
         return kw.keyword + "=" + (kw.action || "badge_only") + (kw.is_active === false ? ":off" : "");
@@ -202,6 +212,7 @@
           stats.status = "running";
           console.log("[SproutMod] Config loaded — user:", currentUserId,
             "keywords:", config.keywords ? config.keywords.length : 0,
+            "categories:", config.categories ? config.categories.length : 0,
             "threshold:", config.threshold,
             "AI → hide:", config.auto_hide_enabled,
             "complete:", config.auto_complete_enabled,
@@ -719,6 +730,34 @@
 
   // ===================== SCANNER =====================
 
+  function restoreAction(row, data) {
+    var action = data.action || "clean";
+    row.setAttribute(PROCESSED_ATTR, "restored-" + action);
+
+    if (action === "clean" || action === "sent" || action === "empty") return;
+
+    var label = data.keyword || data.category || "Flagged";
+    var conf = data.confidence || 1.0;
+    var isKw = !!data.keyword;
+
+    addBadge(row, label, conf, isKw);
+  }
+
+  async function checkForNewMessagesButton() {
+    var newMsgBtn = document.querySelector('button[data-qa-button*="New Message"]');
+    if (newMsgBtn && isVisible(newMsgBtn)) {
+      console.log("[SproutMod] Found 'New Messages' notification, clicking...");
+      newMsgBtn.click();
+      await sleep(2500); // Wait for content to load
+      
+      console.log("[SproutMod] Restarting scan (New Messages clicked)...");
+      isScanning = false;
+      scan();
+      return true;
+    }
+    return false;
+  }
+
   async function scan() {
     if (!config) return;
     if (isScanning) return;
@@ -756,25 +795,54 @@
         }
       }
       if (!hasUnprocessed) {
+        // Even if no unprocessed items, check for "New Messages" button
+        if (await checkForNewMessagesButton()) return;
         isScanning = false;
         return;
       }
 
       // ─── Find the highest timestamp in the current DOM ───
       // If DB timestamp >= highest card timestamp, ALL cards are old → skip entire scan
+      // BUT: We must check if any "old" card is actually unbadged (re-rendered).
+      // If it's unbadged but we have a cached action, we should restore it.
       var highestCardTimestamp = 0;
       for (var t = 0; t < commentRows.length; t++) {
         var ts = getTimestamp(commentRows[t]);
         if (ts > highestCardTimestamp) highestCardTimestamp = ts;
       }
 
-      if (lastCheckedTimestamp > 0 && highestCardTimestamp > 0 && highestCardTimestamp <= lastCheckedTimestamp) {
-        console.log("[SproutMod] All cards are old (highest:", highestCardTimestamp, "≤ db:", lastCheckedTimestamp, ") — marking all and skipping");
+      var allOld = (lastCheckedTimestamp > 0 && highestCardTimestamp > 0 && highestCardTimestamp <= lastCheckedTimestamp);
+
+      if (allOld) {
+        console.log("[SproutMod] All cards seem old (highest:", highestCardTimestamp, "≤ db:", lastCheckedTimestamp, ")");
+        
+        // Check for "New Messages" button before skipping
+        if (await checkForNewMessagesButton()) return;
+
+        // Instead of blindly skipping, check if we have cached actions for them
+        var anyRestored = false;
         for (var s = 0; s < commentRows.length; s++) {
-          if (!commentRows[s].hasAttribute(PROCESSED_ATTR)) {
-            commentRows[s].setAttribute(PROCESSED_ATTR, "skipped-old");
+          if (commentRows[s].hasAttribute(PROCESSED_ATTR)) continue;
+          
+          var g = getGuid(commentRows[s]);
+          if (g && actions[g]) {
+             // We have processed this before! Restore badge/state.
+             restoreAction(commentRows[s], actions[g]);
+             anyRestored = true;
+          } else {
+             // Truly old and unknown? Or maybe we missed it?
+             // If we missed it, we should probably process it.
+             // But if we process it, we might duplicate logs?
+             // For now, if it's old and NOT in actions, we assume it was processed before we started tracking actions or clean.
+             // Safest is to mark as skipped-old to avoid infinite loops on old stuff.
+             commentRows[s].setAttribute(PROCESSED_ATTR, "skipped-old");
           }
         }
+        
+        if (anyRestored) {
+          console.log("[SproutMod] Restored cached actions for re-rendered old items");
+        }
+
         isScanning = false;
         return;
       }
@@ -795,7 +863,12 @@
 
         // Timestamp gate: skip old cards
         if (cardTimestamp > 0 && lastCheckedTimestamp > 0 && cardTimestamp <= lastCheckedTimestamp) {
-          row.setAttribute(PROCESSED_ATTR, "skipped-old");
+          var cached = actions[guid];
+          if (cached) {
+            restoreAction(row, cached);
+          } else {
+            row.setAttribute(PROCESSED_ATTR, "skipped-old");
+          }
           skippedCount++;
           continue;
         }
@@ -872,6 +945,9 @@
         console.log("[SproutMod] Scan: all", skippedCount, "cards skipped (already processed)");
       }
 
+      // ─── Check for "New Messages" button at the end ───
+      if (await checkForNewMessagesButton()) return;
+
     } catch (scanErr) {
       console.error("[SproutMod] Scan error:", scanErr);
     } finally {
@@ -934,8 +1010,13 @@
             break;
           }
         }
-        if (hasNew) {
-          console.log("[SproutMod] Observer: genuinely new items detected");
+        
+        // Also check for New Messages button
+        var newMsgBtn = document.querySelector('button[data-qa-button*="New Message"]');
+        var hasButton = newMsgBtn && isVisible(newMsgBtn);
+
+        if (hasNew || hasButton) {
+          console.log("[SproutMod] Observer: genuinely new items or New Messages button detected");
           scan();
         }
       }, 1200);
@@ -958,8 +1039,13 @@
           break;
         }
       }
-      if (hasNew) {
-        console.log("[SproutMod] Poll: found unprocessed items");
+      
+      // Also check for New Messages button
+      var newMsgBtn = document.querySelector('button[data-qa-button*="New Message"]');
+      var hasButton = newMsgBtn && isVisible(newMsgBtn);
+
+      if (hasNew || hasButton) {
+        console.log("[SproutMod] Poll: found unprocessed items or New Messages button");
         scan();
       }
     }, POLL_INTERVAL);

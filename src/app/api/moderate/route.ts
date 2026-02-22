@@ -217,7 +217,44 @@ export async function POST(req: NextRequest) {
     }
 
     // Apply threshold
-    const flagged = aiResult.highest_score >= config.confidence_threshold;
+    let flagged = false;
+    
+    // Check against per-category thresholds
+    for (const [key, score] of Object.entries(aiResult.scores)) {
+        const cat = activeCats.find((c: any) => c.key === key);
+        // Default to global config if no specific threshold found
+        const threshold = cat?.confidence_threshold ?? config.confidence_threshold;
+        
+        if (score >= threshold) {
+            flagged = true;
+        }
+    }
+
+    // Update highest triggered category logic
+    if (flagged) {
+        // Find the category with the highest score that exceeded its threshold
+        let maxScore = -1;
+        let maxCat = "";
+        
+        for (const [key, score] of Object.entries(aiResult.scores)) {
+             const cat = activeCats.find((c: any) => c.key === key);
+             const threshold = cat?.confidence_threshold ?? config.confidence_threshold;
+             
+             if (score >= threshold && score > maxScore) {
+                 maxScore = score;
+                 maxCat = key;
+             }
+        }
+        
+        if (maxCat) {
+            aiResult.highest_category = maxCat;
+            aiResult.highest_score = maxScore;
+        }
+    } else {
+        // If not flagged, ensure we still have valid highest stats (just below threshold)
+        flagged = false;
+    }
+
     let action: "hide" | "badge" | "none" = "none";
 
     if (flagged) {
@@ -263,22 +300,22 @@ export async function POST(req: NextRequest) {
 // Default categories if user hasn't configured custom ones
 function getDefaultCategories() {
   return [
-    { key: "profanity", label: "General Profanity", description: "Swear words, vulgar language, offensive slang" },
-    { key: "lgbtqia_attack", label: "LGBTQIA+ Attack", description: "Homophobic, transphobic, or anti-LGBTQIA+ language" },
-    { key: "violent_language", label: "Violent Language", description: "Threats of violence, glorification of violence, aggressive language" },
-    { key: "racism", label: "Racism", description: "Racial slurs, discriminatory language, xenophobia" },
-    { key: "boycott_criticism", label: "Boycott & Criticism", description: "Overtly critical language designed to build an agenda against the brand, calls for boycotts" },
-    { key: "fat_shaming", label: "Fat Shaming", description: "Body shaming, mocking weight, demeaning comments about body size" },
-    { key: "eating_disorder", label: "Eating Disorder Shaming", description: "Mocking eating disorders, promoting unhealthy eating, triggering ED content" },
-    { key: "ev_hostility", label: "EV Hostility", description: "Hostile language about electric vehicles, anti-EV propaganda" },
-    { key: "greenwashing", label: "Greenwashing Allegations", description: "Accusations of false environmental claims, eco-fraud allegations" },
-    { key: "nature_wars", label: "Nature Wars", description: "Hostile debates about nature, gardening conflicts, environmental extremism" },
-    { key: "elitism", label: "Elitism", description: "Classist remarks, snobbery, looking down on others based on social status" },
-    { key: "paedophilia", label: "Paedophilia", description: "Any content sexualizing children, grooming language, child exploitation" },
-    { key: "parent_shaming", label: "Parent Shaming", description: "Attacking parenting choices, mom/dad shaming, parental guilt-tripping" },
-    { key: "classism", label: "Classism", description: "Discrimination based on social class, wealth-based mockery" },
-    { key: "child_abuse", label: "Child Abuse", description: "References to child abuse, neglect, or endangerment" },
-    { key: "sexual_content", label: "Sexual Content", description: "Sexually explicit language, inappropriate sexual references" },
-    { key: "spam", label: "Spam", description: "Promotional spam, scam links, bot-generated content" },
+    { key: "profanity", label: "General Profanity", description: "Swear words, vulgar language, offensive slang", confidence_threshold: 0.8 },
+    { key: "lgbtqia_attack", label: "LGBTQIA+ Attack", description: "Homophobic, transphobic, or anti-LGBTQIA+ language", confidence_threshold: 0.8 },
+    { key: "violent_language", label: "Violent Language", description: "Threats of violence, glorification of violence, aggressive language", confidence_threshold: 0.8 },
+    { key: "racism", label: "Racism", description: "Racial slurs, discriminatory language, xenophobia", confidence_threshold: 0.8 },
+    { key: "boycott_criticism", label: "Boycott & Criticism", description: "Overtly critical language designed to build an agenda against the brand, calls for boycotts", confidence_threshold: 0.8 },
+    { key: "fat_shaming", label: "Fat Shaming", description: "Body shaming, mocking weight, demeaning comments about body size", confidence_threshold: 0.8 },
+    { key: "eating_disorder", label: "Eating Disorder Shaming", description: "Mocking eating disorders, promoting unhealthy eating, triggering ED content", confidence_threshold: 0.8 },
+    { key: "ev_hostility", label: "EV Hostility", description: "Hostile language about electric vehicles, anti-EV propaganda", confidence_threshold: 0.8 },
+    { key: "greenwashing", label: "Greenwashing Allegations", description: "Accusations of false environmental claims, eco-fraud allegations", confidence_threshold: 0.8 },
+    { key: "nature_wars", label: "Nature Wars", description: "Hostile debates about nature, gardening conflicts, environmental extremism", confidence_threshold: 0.8 },
+    { key: "elitism", label: "Elitism", description: "Classist remarks, snobbery, looking down on others based on social status", confidence_threshold: 0.8 },
+    { key: "paedophilia", label: "Paedophilia", description: "Any content sexualizing children, grooming language, child exploitation", confidence_threshold: 0.8 },
+    { key: "parent_shaming", label: "Parent Shaming", description: "Attacking parenting choices, mom/dad shaming, parental guilt-tripping", confidence_threshold: 0.8 },
+    { key: "classism", label: "Classism", description: "Discrimination based on social class, wealth-based mockery", confidence_threshold: 0.8 },
+    { key: "child_abuse", label: "Child Abuse", description: "References to child abuse, neglect, or endangerment", confidence_threshold: 0.8 },
+    { key: "sexual_content", label: "Sexual Content", description: "Sexually explicit language, inappropriate sexual references", confidence_threshold: 0.8 },
+    { key: "spam", label: "Spam", description: "Promotional spam, scam links, bot-generated content", confidence_threshold: 0.8 },
   ];
 }

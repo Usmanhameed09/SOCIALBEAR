@@ -20,6 +20,7 @@ export interface ModerationCategory {
   label: string;
   description: string;
   is_active: boolean;
+  confidence_threshold: number;
   sort_order: number;
   created_at: string;
 }
