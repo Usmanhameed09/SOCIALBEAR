@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Shield,
-  Tag,
   CircleCheck,
 } from "lucide-react";
 import clsx from "clsx";
