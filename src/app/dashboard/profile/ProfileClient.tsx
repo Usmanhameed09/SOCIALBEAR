@@ -70,8 +70,9 @@ export default function ProfileClient({ user }: { user: User }) {
       setOldPassword("");
       setPassword("");
       setConfirmPassword("");
-    } catch (error: any) {
-      setMessage({ type: "error", text: error.message || "Failed to update password" });
+    } catch (error) {
+      const errorMessage = (error as Error)?.message || "Failed to update password";
+      setMessage({ type: "error", text: errorMessage });
     } finally {
       setLoading(false);
     }
