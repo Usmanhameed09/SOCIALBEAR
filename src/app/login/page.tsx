@@ -5,7 +5,10 @@ export const dynamic = "force-dynamic";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase-browser";
 import { useRouter } from "next/navigation";
-import { Shield, Eye, EyeOff, Loader2 } from "lucide-react";
+import { Shield, Eye, EyeOff, Loader2, MailCheck } from "lucide-react";
+
+// ✅ Change this to your production URL
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://yourdomain.com";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -14,6 +17,7 @@ export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showConfirmation, setShowConfirmation] = useState(false);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -24,17 +28,25 @@ export default function LoginPage() {
     try {
       const supabase = createClient();
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${SITE_URL}/auth/callback`,
+          },
+        });
         if (error) throw error;
+        // Show confirmation message instead of redirecting
+        setShowConfirmation(true);
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
+        router.push("/dashboard");
+        router.refresh();
       }
-      router.push("/dashboard");
-      router.refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -71,86 +83,122 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Form card */}
-        <div className="bg-surface-900/80 backdrop-blur-xl border border-surface-700/50 rounded-2xl p-8 shadow-2xl">
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-1.5">
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-surface-800/50 border border-surface-600/50 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all"
-                placeholder="you@company.com"
-                required
-              />
+        {/* Email Confirmation Message */}
+        {showConfirmation ? (
+          <div className="bg-surface-900/80 backdrop-blur-xl border border-surface-700/50 rounded-2xl p-8 shadow-2xl text-center">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-brand-500/10 border border-brand-500/20 mb-5">
+              <MailCheck className="w-7 h-7 text-brand-400" />
             </div>
+            <h2 className="text-xl font-semibold text-white mb-3">
+              Check your email
+            </h2>
+            <p className="text-surface-400 text-sm leading-relaxed mb-2">
+              We&apos;ve sent a confirmation link to
+            </p>
+            <p className="text-brand-400 font-medium text-sm mb-4">{email}</p>
+            <p className="text-surface-500 text-xs leading-relaxed">
+              Please click the link in the email to verify your account before
+              signing in. The link will redirect you to the app.
+            </p>
 
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-1.5">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 bg-surface-800/50 border border-surface-600/50 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all pr-12"
-                  placeholder="••••••••"
-                  required
-                  minLength={6}
-                />
+            <div className="mt-6 pt-6 border-t border-surface-700/50">
+              <button
+                onClick={() => {
+                  setShowConfirmation(false);
+                  setIsSignUp(false);
+                  setPassword("");
+                  setError("");
+                }}
+                className="text-sm text-surface-400 hover:text-brand-400 transition-colors"
+              >
+                ← Back to Sign In
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Form card */}
+            <div className="bg-surface-900/80 backdrop-blur-xl border border-surface-700/50 rounded-2xl p-8 shadow-2xl">
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-surface-300 mb-1.5">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-4 py-3 bg-surface-800/50 border border-surface-600/50 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all"
+                    placeholder="you@company.com"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-surface-300 mb-1.5">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full px-4 py-3 bg-surface-800/50 border border-surface-600/50 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all pr-12"
+                      placeholder="••••••••"
+                      required
+                      minLength={6}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-surface-500 hover:text-surface-300"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="bg-danger-500/10 border border-danger-500/20 rounded-xl px-4 py-3 text-danger-400 text-sm">
+                    {error}
+                  </div>
+                )}
+
                 <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-surface-500 hover:text-surface-300"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 px-4 bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand-500/20"
                 >
-                  {showPassword ? (
-                    <EyeOff className="w-5 h-5" />
+                  {loading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : isSignUp ? (
+                    "Create Account"
                   ) : (
-                    <Eye className="w-5 h-5" />
+                    "Sign In"
                   )}
+                </button>
+              </form>
+
+              <div className="mt-6 text-center">
+                <button
+                  onClick={() => {
+                    setIsSignUp(!isSignUp);
+                    setError("");
+                  }}
+                  className="text-sm text-surface-400 hover:text-brand-400 transition-colors"
+                >
+                  {isSignUp
+                    ? "Already have an account? Sign in"
+                    : "Need an account? Sign up"}
                 </button>
               </div>
             </div>
-
-            {error && (
-              <div className="bg-danger-500/10 border border-danger-500/20 rounded-xl px-4 py-3 text-danger-400 text-sm">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 px-4 bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand-500/20"
-            >
-              {loading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : isSignUp ? (
-                "Create Account"
-              ) : (
-                "Sign In"
-              )}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setError("");
-              }}
-              className="text-sm text-surface-400 hover:text-brand-400 transition-colors"
-            >
-              {isSignUp
-                ? "Already have an account? Sign in"
-                : "Need an account? Sign up"}
-            </button>
-          </div>
-        </div>
+          </>
+        )}
 
         <p className="text-center text-surface-600 text-xs mt-8">
           Secure admin panel for your Socialbear AI
