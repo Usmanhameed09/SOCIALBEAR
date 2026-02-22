@@ -11,11 +11,11 @@ export async function GET(req: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Fetch config
+    // Fetch config — include auto_complete_enabled
     const { data: config } = await supabase
       .from("moderation_config")
       .select(
-        "confidence_threshold, enabled_categories, auto_hide_enabled, dry_run_mode, ai_model"
+        "confidence_threshold, enabled_categories, auto_hide_enabled, auto_complete_enabled, dry_run_mode, ai_model"
       )
       .eq("user_id", user.id)
       .single();
@@ -48,10 +48,12 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({
+      user_id: user.id,
       keywords: keywords || [],
       threshold: config.confidence_threshold,
       enabled_categories: config.enabled_categories,
       auto_hide_enabled: config.auto_hide_enabled,
+      auto_complete_enabled: config.auto_complete_enabled ?? false,
       dry_run_mode: config.dry_run_mode,
       ai_model: config.ai_model || "gpt-4o-mini",
       active_ai_categories: activeCategoryCount,

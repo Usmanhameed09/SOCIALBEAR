@@ -11,9 +11,42 @@ import {
   KeyRound,
   EyeOff,
   Tag,
+  CheckCircle2,
   X,
 } from "lucide-react";
 import clsx from "clsx";
+
+type ActionType = "complete" | "badge_only" | "auto_hide";
+
+const ACTION_OPTIONS: {
+  value: ActionType;
+  label: string;
+  icon: typeof Tag;
+  activeClasses: string;
+  badgeClasses: string;
+}[] = [
+  {
+    value: "complete",
+    label: "Complete",
+    icon: CheckCircle2,
+    activeClasses: "border-green-500 bg-green-50 text-green-700",
+    badgeClasses: "bg-green-50 text-green-600",
+  },
+  {
+    value: "badge_only",
+    label: "Badge Only",
+    icon: Tag,
+    activeClasses: "border-brand-500 bg-brand-50 text-brand-700",
+    badgeClasses: "bg-blue-50 text-blue-600",
+  },
+  {
+    value: "auto_hide",
+    label: "Auto-Hide",
+    icon: EyeOff,
+    activeClasses: "border-danger-500 bg-danger-50 text-danger-700",
+    badgeClasses: "bg-danger-50 text-danger-600",
+  },
+];
 
 export default function KeywordsPage() {
   const [keywords, setKeywords] = useState<KeywordRule[]>([]);
@@ -21,9 +54,9 @@ export default function KeywordsPage() {
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");
-  const [newAction, setNewAction] = useState<"badge_only" | "auto_hide" | "both">(
-    "badge_only"
-  );
+  const [selectedActions, setSelectedActions] = useState<ActionType[]>([
+    "badge_only",
+  ]);
   const [saving, setSaving] = useState(false);
   const supabase = createClient();
 
@@ -47,8 +80,19 @@ export default function KeywordsPage() {
     fetchKeywords();
   }, [fetchKeywords]);
 
+  const toggleAction = (action: ActionType) => {
+    setSelectedActions((prev) => {
+      if (prev.includes(action)) {
+        // Don't allow deselecting if it's the only one
+        if (prev.length === 1) return prev;
+        return prev.filter((a) => a !== action);
+      }
+      return [...prev, action];
+    });
+  };
+
   const addKeyword = async () => {
-    if (!newKeyword.trim()) return;
+    if (!newKeyword.trim() || selectedActions.length === 0) return;
     setSaving(true);
 
     const {
@@ -56,15 +100,20 @@ export default function KeywordsPage() {
     } = await supabase.auth.getUser();
     if (!user) return;
 
+    // Store actions as a comma-separated string or JSON array
+    // Using a sorted joined string for the "action" column
+    const actionValue = selectedActions.sort().join(",");
+
     const { error } = await supabase.from("keyword_rules").insert({
       user_id: user.id,
       keyword: newKeyword.trim().toLowerCase(),
-      action: newAction,
+      action: actionValue,
       is_active: true,
     });
 
     if (!error) {
       setNewKeyword("");
+      setSelectedActions(["badge_only"]);
       setShowAdd(false);
       fetchKeywords();
     }
@@ -84,6 +133,11 @@ export default function KeywordsPage() {
     setKeywords((prev) =>
       prev.map((k) => (k.id === id ? { ...k, is_active: !currentState } : k))
     );
+  };
+
+  // Parse action string into array
+  const parseActions = (action: string): ActionType[] => {
+    return action.split(",").filter(Boolean) as ActionType[];
   };
 
   const filteredKeywords = keywords.filter((k) =>
@@ -152,51 +206,48 @@ export default function KeywordsPage() {
 
               <div>
                 <label className="block text-sm font-medium text-surface-700 mb-1.5">
-                  Action
+                  Actions{" "}
+                  <span className="text-surface-400 font-normal">
+                    (select one or more)
+                  </span>
                 </label>
                 <div className="grid grid-cols-3 gap-3">
-                  <button
-                    onClick={() => setNewAction("badge_only")}
-                    className={clsx(
-                      "flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-all",
-                      newAction === "badge_only"
-                        ? "border-brand-500 bg-brand-50 text-brand-700"
-                        : "border-surface-200 text-surface-600 hover:border-surface-300"
-                    )}
-                  >
-                    <Tag className="w-4 h-4" />
-                    Badge Only
-                  </button>
-                  <button
-                    onClick={() => setNewAction("auto_hide")}
-                    className={clsx(
-                      "flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-all",
-                      newAction === "auto_hide"
-                        ? "border-danger-500 bg-danger-50 text-danger-700"
-                        : "border-surface-200 text-surface-600 hover:border-surface-300"
-                    )}
-                  >
-                    <EyeOff className="w-4 h-4" />
-                    Auto-Hide
-                  </button>
-                  <button
-                    onClick={() => setNewAction("both")}
-                    className={clsx(
-                      "flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-all",
-                      newAction === "both"
-                        ? "border-purple-500 bg-purple-50 text-purple-700"
-                        : "border-surface-200 text-surface-600 hover:border-surface-300"
-                    )}
-                  >
-                    <Tag className="w-4 h-4" />
-                    Badge + Hide
-                  </button>
+                  {ACTION_OPTIONS.map((opt) => {
+                    const Icon = opt.icon;
+                    const isSelected = selectedActions.includes(opt.value);
+                    return (
+                      <button
+                        key={opt.value}
+                        onClick={() => toggleAction(opt.value)}
+                        className={clsx(
+                          "relative flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl border text-sm font-medium transition-all",
+                          isSelected
+                            ? opt.activeClasses
+                            : "border-surface-200 text-surface-600 hover:border-surface-300"
+                        )}
+                      >
+                        {isSelected && (
+                          <div className="absolute top-1.5 right-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </div>
+                        )}
+                        <Icon className="w-4 h-4" />
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
+                {selectedActions.length > 1 && (
+                  <p className="text-xs text-surface-400 mt-2">
+                    {selectedActions.length} actions selected — all will apply
+                    when this keyword is detected.
+                  </p>
+                )}
               </div>
 
               <button
                 onClick={addKeyword}
-                disabled={!newKeyword.trim() || saving}
+                disabled={!newKeyword.trim() || selectedActions.length === 0 || saving}
                 className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white font-medium rounded-xl text-sm transition-colors"
               >
                 {saving ? "Adding..." : "Add Rule"}
@@ -230,63 +281,70 @@ export default function KeywordsPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {filteredKeywords.map((rule, i) => (
-            <div
-              key={rule.id}
-              className="bg-white rounded-xl border border-surface-200/80 px-5 py-4 flex items-center justify-between hover:shadow-sm transition-shadow animate-slide-up"
-              style={{ animationDelay: `${i * 30}ms` }}
-            >
-              <div className="flex items-center gap-4">
-                {/* Toggle */}
-                <button
-                  onClick={() => toggleActive(rule.id, rule.is_active)}
-                  className={clsx("toggle-switch", rule.is_active && "active")}
-                />
-
-                {/* Keyword */}
-                <div>
-                  <span
+          {filteredKeywords.map((rule, i) => {
+            const actions = parseActions(rule.action);
+            return (
+              <div
+                key={rule.id}
+                className="bg-white rounded-xl border border-surface-200/80 px-5 py-4 flex items-center justify-between hover:shadow-sm transition-shadow animate-slide-up"
+                style={{ animationDelay: `${i * 30}ms` }}
+              >
+                <div className="flex items-center gap-4">
+                  {/* Toggle */}
+                  <button
+                    onClick={() => toggleActive(rule.id, rule.is_active)}
                     className={clsx(
-                      "font-mono text-sm font-medium",
-                      rule.is_active
-                        ? "text-surface-900"
-                        : "text-surface-400 line-through"
+                      "toggle-switch",
+                      rule.is_active && "active"
                     )}
+                  />
+
+                  {/* Keyword */}
+                  <div>
+                    <span
+                      className={clsx(
+                        "font-mono text-sm font-medium",
+                        rule.is_active
+                          ? "text-surface-900"
+                          : "text-surface-400 line-through"
+                      )}
+                    >
+                      {rule.keyword}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Action badges — show all selected actions */}
+                  {actions.map((action) => {
+                    const opt = ACTION_OPTIONS.find(
+                      (o) => o.value === action
+                    );
+                    if (!opt) return null;
+                    return (
+                      <span
+                        key={action}
+                        className={clsx(
+                          "px-2.5 py-1 rounded-lg text-xs font-medium",
+                          opt.badgeClasses
+                        )}
+                      >
+                        {opt.label}
+                      </span>
+                    );
+                  })}
+
+                  {/* Delete */}
+                  <button
+                    onClick={() => deleteKeyword(rule.id)}
+                    className="p-1.5 hover:bg-danger-50 rounded-lg text-surface-400 hover:text-danger-500 transition-colors ml-1"
                   >
-                    {rule.keyword}
-                  </span>
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
-
-              <div className="flex items-center gap-3">
-                {/* Action badge */}
-                <span
-                  className={clsx(
-                    "px-2.5 py-1 rounded-lg text-xs font-medium",
-                    rule.action === "auto_hide"
-                      ? "bg-danger-50 text-danger-600"
-                      : rule.action === "both"
-                      ? "bg-purple-50 text-purple-700"
-                      : "bg-blue-50 text-blue-600"
-                  )}
-                >
-                  {rule.action === "auto_hide"
-                    ? "Auto-Hide"
-                    : rule.action === "both"
-                    ? "Badge + Hide"
-                    : "Badge Only"}
-                </span>
-
-                {/* Delete */}
-                <button
-                  onClick={() => deleteKeyword(rule.id)}
-                  className="p-1.5 hover:bg-danger-50 rounded-lg text-surface-400 hover:text-danger-500 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
