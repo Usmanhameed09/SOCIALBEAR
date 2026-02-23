@@ -370,7 +370,7 @@ export default function CategoriesPage() {
               Delete category?
             </h3>
             <p className="text-center text-sm text-surface-500 mb-6">
-              <span className="font-medium text-surface-700">"{deleteConfirm.label}"</span> will be permanently removed and can't be recovered.
+              <span className="font-medium text-surface-700">&ldquo;{deleteConfirm.label}&rdquo;</span> will be permanently removed and can&apos;t be recovered.
             </p>
             <div className="flex gap-3">
               <button
