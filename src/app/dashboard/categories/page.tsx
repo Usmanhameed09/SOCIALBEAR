@@ -59,6 +59,7 @@ export default function CategoriesPage() {
   const [editForm, setEditForm] = useState({ label: "", description: "", confidence_threshold: 0.8 });
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ key: "", label: "", description: "", confidence_threshold: 0.8 });
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; label: string } | null>(null);
   const supabase = createClient();
 
   const fetchCategories = useCallback(async () => {
@@ -135,17 +136,22 @@ export default function CategoriesPage() {
     setSaving(null);
   }
 
-  async function deleteCategory(id: string) {
-    if (!confirm("Delete this category?")) return;
+  async function deleteCategory(id: string, label: string) {
+    setDeleteConfirm({ id, label });
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirm) return;
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
-    await fetch(`/api/categories?id=${id}`, {
+    await fetch(`/api/categories?id=${deleteConfirm.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${session.access_token}` },
     });
 
-    setCategories((prev) => prev.filter((c) => c.id !== id));
+    setCategories((prev) => prev.filter((c) => c.id !== deleteConfirm.id));
+    setDeleteConfirm(null);
   }
 
   async function addCategory() {
@@ -308,7 +314,7 @@ export default function CategoriesPage() {
                       setEditingId={setEditingId}
                       onToggle={() => toggleCategory(cat)}
                       onSaveEdit={() => saveEdit(cat)}
-                      onDelete={() => deleteCategory(cat.id)}
+                      onDelete={() => deleteCategory(cat.id, cat.label)}
                     />
                   ))}
                 </div>
@@ -338,13 +344,50 @@ export default function CategoriesPage() {
                     setEditingId={setEditingId}
                     onToggle={() => toggleCategory(cat)}
                     onSaveEdit={() => saveEdit(cat)}
-                    onDelete={() => deleteCategory(cat.id)}
+                    onDelete={() => deleteCategory(cat.id, cat.label)}
                   />
                 ))}
               </div>
             </div>
           )}
         </>
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+            onClick={() => setDeleteConfirm(null)}
+          />
+          {/* Modal */}
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-surface-200 p-6 w-full max-w-sm mx-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-center w-12 h-12 rounded-full bg-danger-50 mx-auto mb-4">
+              <Trash2 className="w-5 h-5 text-danger-500" />
+            </div>
+            <h3 className="text-center font-semibold text-surface-900 text-base mb-1">
+              Delete category?
+            </h3>
+            <p className="text-center text-sm text-surface-500 mb-6">
+              <span className="font-medium text-surface-700">"{deleteConfirm.label}"</span> will be permanently removed and can't be recovered.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 bg-surface-100 hover:bg-surface-200 text-surface-700 text-sm font-semibold px-4 py-2.5 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -426,15 +469,17 @@ function CategoryRow({
               <div className="flex gap-2">
                 <button
                   onClick={onSaveEdit}
-                  className="text-brand-500 hover:text-brand-600 p-1"
+                  className="flex items-center gap-1.5 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
                 >
-                  <Check className="w-4 h-4" />
+                  <Check className="w-3.5 h-3.5" />
+                  Save changes
                 </button>
                 <button
                   onClick={() => setEditingId(null)}
-                  className="text-surface-400 hover:text-surface-600 p-1"
+                  className="flex items-center gap-1.5 bg-surface-100 hover:bg-surface-200 text-surface-600 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-3.5 h-3.5" />
+                  Cancel
                 </button>
               </div>
             </div>
