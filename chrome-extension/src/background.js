@@ -53,12 +53,153 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function getAuthHeaders() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["authToken"], (data) => {
+      const headers = { "Content-Type": "application/json" };
+      if (data && data.authToken) {
+        headers.Authorization = `Bearer ${data.authToken}`;
+      }
+      resolve(headers);
+    });
+  });
+}
+
+async function getAuthState() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["authToken", "refreshToken"], (data) => {
       resolve({
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${data.authToken || ""}`,
+        authToken: (data && data.authToken) || "",
+        refreshToken: (data && data.refreshToken) || "",
       });
     });
   });
+}
+
+async function setAuthState({ authToken, refreshToken }) {
+  return new Promise((resolve) => {
+    const update = {};
+    if (typeof authToken === "string") update.authToken = authToken;
+    if (typeof refreshToken === "string") update.refreshToken = refreshToken;
+    chrome.storage.local.set(update, resolve);
+  });
+}
+
+async function clearAuthState() {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(["authToken", "refreshToken"], resolve);
+  });
+}
+
+function getUidFromJwt(token) {
+  try {
+    if (!token) return "default";
+    const parts = token.split(".");
+    if (parts.length !== 3) return "default";
+    const payload = JSON.parse(atob(parts[1]));
+    return payload && payload.sub ? payload.sub : "default";
+  } catch (_) {
+    return "default";
+  }
+}
+
+function getJwtExpMs(token) {
+  try {
+    if (!token) return 0;
+    const parts = token.split(".");
+    if (parts.length !== 3) return 0;
+    const payload = JSON.parse(atob(parts[1]));
+    if (!payload || !payload.exp) return 0;
+    return payload.exp * 1000;
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function notifyAuthRequired(message) {
+  try {
+    chrome.runtime.sendMessage({ type: "AUTH_REQUIRED", message: message || "Please sign in again" });
+  } catch (_) {}
+}
+
+async function refreshAccessToken(baseUrl) {
+  const auth = await getAuthState();
+  if (!auth.refreshToken) return { ok: false, error: "No refresh token" };
+
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: auth.refreshToken }),
+    });
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : "Network error" };
+  }
+
+  if (!res.ok) {
+    let errText = "Unable to refresh session";
+    try {
+      const e = await res.json();
+      if (e && e.error) errText = e.error;
+    } catch (_) {}
+    return { ok: false, error: errText };
+  }
+
+  const data = await res.json().catch(() => ({}));
+  if (!data || !data.access_token) return { ok: false, error: "Invalid refresh response" };
+  await setAuthState({ authToken: data.access_token, refreshToken: data.refresh_token || "" });
+  return { ok: true, accessToken: data.access_token };
+}
+
+async function fetchWithAuthRetry(baseUrl, url, options) {
+  const auth = await getAuthState();
+  if (!auth.authToken) {
+    return { ok: false, status: 0, error: "Not connected" };
+  }
+
+  const expMs = getJwtExpMs(auth.authToken);
+  if (expMs && expMs - Date.now() < 2 * 60 * 1000) {
+    const refreshed0 = await refreshAccessToken(baseUrl);
+    if (refreshed0.ok && refreshed0.accessToken) {
+      const auth2 = await getAuthState();
+      auth.authToken = auth2.authToken || refreshed0.accessToken;
+    } else {
+      await clearAuthState();
+      await notifyAuthRequired("Session expired. Please sign in again.");
+      return { ok: false, status: 401, error: refreshed0.error || "Session expired" };
+    }
+  }
+
+  const headers = Object.assign(
+    { "Content-Type": "application/json", Authorization: `Bearer ${auth.authToken}` },
+    (options && options.headers) || {}
+  );
+
+  let response;
+  try {
+    response = await fetch(url, Object.assign({}, options || {}, { headers }));
+  } catch (err) {
+    return { ok: false, status: 0, error: err && err.message ? err.message : "Network error" };
+  }
+
+  if (response.status !== 401) {
+    return response;
+  }
+
+  const refreshed = await refreshAccessToken(baseUrl);
+  if (!refreshed.ok) {
+    await clearAuthState();
+    await notifyAuthRequired("Session expired. Please sign in again.");
+    return response;
+  }
+
+  const retryHeaders = Object.assign(
+    { "Content-Type": "application/json", Authorization: `Bearer ${refreshed.accessToken}` },
+    (options && options.headers) || {}
+  );
+  try {
+    return await fetch(url, Object.assign({}, options || {}, { headers: retryHeaders }));
+  } catch (err) {
+    return { ok: false, status: 0, error: err && err.message ? err.message : "Network error" };
+  }
 }
 
 async function getBaseUrl() {
@@ -72,11 +213,8 @@ async function getBaseUrl() {
 async function handleModeration(data) {
   try {
     const baseUrl = await getBaseUrl();
-    const headers = await getAuthHeaders();
-
-    const response = await fetch(`${baseUrl}/api/moderate`, {
+    const response = await fetchWithAuthRetry(baseUrl, `${baseUrl}/api/moderate`, {
       method: "POST",
-      headers,
       body: JSON.stringify({
         message_text: data.text,
         message_id: data.messageId,
@@ -84,9 +222,13 @@ async function handleModeration(data) {
       }),
     });
 
+    if (!response || typeof response.json !== "function") {
+      return { success: false, error: response && response.error ? response.error : "API error" };
+    }
+
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      return { success: false, error: err.error || "API error" };
+      return { success: false, error: err.error || `HTTP ${response.status}` };
     }
 
     const result = await response.json();
@@ -109,9 +251,15 @@ async function handleModeration(data) {
 async function handleFetchConfig() {
   try {
     const baseUrl = await getBaseUrl();
-    const headers = await getAuthHeaders();
+    const auth = await getAuthState();
+    if (!auth.authToken) {
+      return { success: false, error: "Not connected" };
+    }
+    const response = await fetchWithAuthRetry(baseUrl, `${baseUrl}/api/config?ts=${Date.now()}`, { cache: "no-store" });
 
-    const response = await fetch(`${baseUrl}/api/config`, { headers });
+    if (!response || typeof response.json !== "function") {
+      return { success: false, error: response && response.error ? response.error : "Failed to fetch config" };
+    }
 
     if (!response.ok) {
       let errText = "Failed to fetch config";
@@ -123,32 +271,26 @@ async function handleFetchConfig() {
           errText = await response.text();
         } catch (_) {}
       }
-      try {
-        var t = (headers.Authorization || "").replace("Bearer ", "");
-        var uid = "default";
-        if (t) { var p = JSON.parse(atob(t.split(".")[1])); uid = p.sub || "default"; }
-        return new Promise((resolve) => {
-          chrome.storage.local.get(["cachedConfig_" + uid], (data) => {
-            if (data["cachedConfig_" + uid]) {
-              console.warn("[SproutMod] Using cached config (HTTP " + response.status + ")");
-              resolve({ success: true, data: data["cachedConfig_" + uid], cached: true });
-            } else {
-              resolve({ success: false, error: errText });
-            }
-          });
+      const latestAuth = await getAuthState();
+      const uid = getUidFromJwt(latestAuth.authToken || auth.authToken);
+      return new Promise((resolve) => {
+        chrome.storage.local.get(["cachedConfig_" + uid], (data) => {
+          if (data["cachedConfig_" + uid]) {
+            console.warn("[SproutMod] Using cached config (HTTP " + response.status + ")");
+            resolve({ success: true, data: data["cachedConfig_" + uid], cached: true });
+          } else {
+            resolve({ success: false, error: errText });
+          }
         });
-      } catch (_) {
-        return { success: false, error: errText };
-      }
+      });
     }
 
     const config = await response.json();
 
     // Cache per-user as fallback only
     try {
-      var t = (headers.Authorization || "").replace("Bearer ", "");
-      var uid = "default";
-      if (t) { var p = JSON.parse(atob(t.split(".")[1])); uid = p.sub || "default"; }
+      const latestAuth = await getAuthState();
+      var uid = getUidFromJwt(latestAuth.authToken || auth.authToken);
       chrome.storage.local.set({ ["cachedConfig_" + uid]: config });
     } catch (_) {}
 
@@ -156,10 +298,8 @@ async function handleFetchConfig() {
   } catch (err) {
     // Network error - use cached config
     try {
-      var h = await getAuthHeaders();
-      var t2 = (h.Authorization || "").replace("Bearer ", "");
-      var uid2 = "default";
-      if (t2) { var p2 = JSON.parse(atob(t2.split(".")[1])); uid2 = p2.sub || "default"; }
+      const auth = await getAuthState();
+      var uid2 = getUidFromJwt(auth.authToken);
       return new Promise((resolve) => {
         chrome.storage.local.get(["cachedConfig_" + uid2], (data) => {
           if (data["cachedConfig_" + uid2]) {
@@ -179,14 +319,14 @@ async function handleFetchConfig() {
 async function handleUpdateLog(data) {
   try {
     const baseUrl = await getBaseUrl();
-    const headers = await getAuthHeaders();
-
-    const response = await fetch(`${baseUrl}/api/logs`, {
+    const response = await fetchWithAuthRetry(baseUrl, `${baseUrl}/api/logs`, {
       method: "POST",
-      headers,
       body: JSON.stringify(data),
     });
 
+    if (!response || typeof response.json !== "function") {
+      return { success: false, error: response && response.error ? response.error : "API error" };
+    }
     return { success: response.ok };
   } catch (err) {
     return { success: false, error: err.message };
@@ -196,12 +336,13 @@ async function handleUpdateLog(data) {
 async function handleUpdateCounters(data) {
   try {
     const baseUrl = await getBaseUrl();
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${baseUrl}/api/counters`, {
+    const response = await fetchWithAuthRetry(baseUrl, `${baseUrl}/api/counters`, {
       method: "POST",
-      headers,
       body: JSON.stringify(data),
     });
+    if (!response || typeof response.json !== "function") {
+      return { success: false, error: response && response.error ? response.error : "API error" };
+    }
     if (!response.ok) {
       let err = null;
       try {
@@ -227,13 +368,13 @@ async function handleUpdateCounters(data) {
 async function handleGetLastTimestamp() {
   try {
     const baseUrl = await getBaseUrl();
-    const headers = await getAuthHeaders();
-
-    const response = await fetch(`${baseUrl}/api/counters/last-timestamp`, {
+    const response = await fetchWithAuthRetry(baseUrl, `${baseUrl}/api/counters/last-timestamp`, {
       method: "GET",
-      headers,
     });
 
+    if (!response || typeof response.json !== "function") {
+      return { success: false, error: response && response.error ? response.error : "API error" };
+    }
     if (!response.ok) {
       console.warn("[SproutMod] Failed to fetch last_checked_timestamp, HTTP", response.status);
       return { success: false, error: "HTTP " + response.status };
@@ -252,14 +393,14 @@ async function handleGetLastTimestamp() {
 async function handleSaveLastTimestamp(data) {
   try {
     const baseUrl = await getBaseUrl();
-    const headers = await getAuthHeaders();
-
-    const response = await fetch(`${baseUrl}/api/counters/last-timestamp`, {
+    const response = await fetchWithAuthRetry(baseUrl, `${baseUrl}/api/counters/last-timestamp`, {
       method: "POST",
-      headers,
       body: JSON.stringify({ last_checked_timestamp: data.last_checked_timestamp }),
     });
 
+    if (!response || typeof response.json !== "function") {
+      return { success: false, error: response && response.error ? response.error : "API error" };
+    }
     if (!response.ok) {
       console.warn("[SproutMod] Failed to save last_checked_timestamp, HTTP", response.status);
       return { success: false, error: "HTTP " + response.status };
