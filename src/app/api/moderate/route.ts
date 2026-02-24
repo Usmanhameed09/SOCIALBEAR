@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
         config.auto_hide_enabled &&
         !config.dry_run_mode;
       const action = wantsHide ? "hide" : "badge";
+      const should_complete = !!(config.auto_complete_enabled && !config.dry_run_mode);
 
       const { data: inserted } = await supabase
         .from("moderation_logs")
@@ -129,6 +130,7 @@ export async function POST(req: NextRequest) {
         scores: {},
         flagged: true,
         action,
+        should_complete,
         matched_keyword: matchedKeyword.keyword,
         confidence: 1.0,
         log_id: inserted?.id || null,
@@ -256,6 +258,7 @@ export async function POST(req: NextRequest) {
     }
 
     let action: "hide" | "badge" | "none" = "none";
+    const should_complete = !!(flagged && config.auto_complete_enabled && !config.dry_run_mode);
 
     if (flagged) {
       if (config.auto_hide_enabled && !config.dry_run_mode) {
@@ -286,6 +289,7 @@ export async function POST(req: NextRequest) {
       scores: aiResult.scores || {},
       flagged,
       action,
+      should_complete,
       confidence: aiResult.highest_score || 0,
       highest_category: aiResult.highest_category || "",
       reason: aiResult.reason || "",

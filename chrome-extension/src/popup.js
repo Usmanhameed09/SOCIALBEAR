@@ -37,6 +37,15 @@ function hideError() {
   loginError.classList.remove("show");
 }
 
+try {
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "AUTH_REQUIRED") {
+      showLoginView();
+      showError(msg.message || "Session expired. Please sign in again.");
+    }
+  });
+} catch (_) {}
+
 // LOGIN
 loginBtn.addEventListener("click", async () => {
   hideError();
@@ -131,6 +140,7 @@ async function loginViaSupabase(apiUrl, email, password) {
       chrome.storage.local.set(
         {
           authToken: data.access_token || data.token,
+          refreshToken: data.refresh_token || "",
           apiBaseUrl: apiUrl,
           userEmail: email,
         },

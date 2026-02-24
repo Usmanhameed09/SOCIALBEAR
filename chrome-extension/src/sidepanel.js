@@ -147,27 +147,19 @@ function timeAgo(d) {
 // CONFIG SUMMARY
 function loadConfigSummary() {
   try {
-    chrome.storage.local.get(["authToken", "apiBaseUrl"], function(auth) {
-      if (!auth || !auth.authToken || !auth.apiBaseUrl) return;
-      fetch(auth.apiBaseUrl + "/api/config", {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + auth.authToken,
-        },
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(cfg) {
-        setText("cfg-autohide", cfg.auto_hide_enabled ? "ON" : "OFF");
-        var ah = document.getElementById("cfg-autohide");
-        if (ah) ah.className = "config-val " + (cfg.auto_hide_enabled ? "on" : "off");
-        setText("cfg-dryrun", cfg.dry_run_mode ? "ON" : "OFF");
-        var dr = document.getElementById("cfg-dryrun");
-        if (dr) dr.className = "config-val " + (cfg.dry_run_mode ? "off" : "on");
-        setText("cfg-model", cfg.ai_model || "gpt-4o-mini");
-        setText("cfg-keywords", (cfg.keywords || []).length + " active");
-        setText("cfg-categories", (cfg.active_ai_categories || 0) + " active");
-      })
-      .catch(function() {});
+    chrome.runtime.sendMessage({ type: "FETCH_CONFIG" }, function(resp) {
+      if (chrome.runtime.lastError || !resp) return;
+      if (!resp.success || !resp.data) return;
+      var cfg = resp.data;
+      setText("cfg-autohide", cfg.auto_hide_enabled ? "ON" : "OFF");
+      var ah = document.getElementById("cfg-autohide");
+      if (ah) ah.className = "config-val " + (cfg.auto_hide_enabled ? "on" : "off");
+      setText("cfg-dryrun", cfg.dry_run_mode ? "ON" : "OFF");
+      var dr = document.getElementById("cfg-dryrun");
+      if (dr) dr.className = "config-val " + (cfg.dry_run_mode ? "off" : "on");
+      setText("cfg-model", cfg.ai_model || "gpt-4o-mini");
+      setText("cfg-keywords", (cfg.keywords || []).length + " active");
+      setText("cfg-categories", (cfg.categories || []).length + " active");
     });
   } catch (_) {}
 }
@@ -183,6 +175,15 @@ try {
       if (msg.data.lastScan) {
         setText("footer-time", timeAgo(new Date(msg.data.lastScan)));
       }
+    }
+    if (msg.type === "AUTH_REQUIRED") {
+      try {
+        showLoginView();
+        if (loginError && msg.message) {
+          loginError.textContent = msg.message;
+          loginError.classList.add("show");
+        }
+      } catch (_) {}
     }
   });
 } catch (_) {}

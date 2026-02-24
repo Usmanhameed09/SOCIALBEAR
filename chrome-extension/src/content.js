@@ -1,5 +1,5 @@
 // ====================================================
-// Sprout Social AI Moderator — Content Script v5.1
+// Sprout Social AI Moderator — Content Script v5.3
 // Timestamp-based iteration: only processes comments
 // newer than last_checked_timestamp from the database.
 // Counters reset to 0 each scan cycle.
@@ -10,6 +10,7 @@
 
   const PROCESSED_ATTR = "data-sproutmod-processed";
   const BADGE_CLASS = "sproutmod-badge";
+  const GUID_ATTR = "data-sproutmod-guid";
   const POLL_INTERVAL = 6000;
   const CONFIG_REFRESH_INTERVAL = 10000;
   const STORAGE_KEY_PREFIX = "sproutmod_actions_v5_";
@@ -17,6 +18,9 @@
   let currentUserId = null;
   let config = null;
   let isScanning = false;
+  let fullScanComplete = false;
+  let lastRestoreBadgesAt = 0;
+  let lastNewMessagesClickAt = 0;
 
   // ─── Timestamp gate: fetched ONCE at init from server, then maintained locally ───
   let lastCheckedTimestamp = 0;
@@ -28,6 +32,7 @@
   let stats = { scanned: 0, flagged: 0, hidden: 0, completed: 0, lastScan: null, status: "initializing" };
   let lastCountersSent = null;
   let configRetryCount = 0;
+  let pendingScanMode = null;
 
   // ===================== PERSISTENCE =====================
 
@@ -166,6 +171,9 @@
         if (response && response.success) {
           configRetryCount = 0;
           config = response.data;
+          if (response.cached) {
+            console.warn("[SproutMod] Config loaded from cache (server fetch failed)");
+          }
 
           // Detect user switch
           var newUserId = config.user_id || null;
@@ -177,6 +185,7 @@
             lastCountersSent = null;
             lastCheckedTimestamp = 0;
             timestampLoaded = false;
+            fullScanComplete = false;
             prevConfigFingerprint = null;
             document.querySelectorAll("[" + PROCESSED_ATTR + "]").forEach(function (el) { el.removeAttribute(PROCESSED_ATTR); });
             document.querySelectorAll("." + BADGE_CLASS).forEach(function (el) { el.remove(); });
@@ -195,17 +204,7 @@
           // Only reset timestamp on MANUAL_SCAN or FULL_RESET
           var newFingerprint = buildConfigFingerprint(config);
           if (prevConfigFingerprint !== null && prevConfigFingerprint !== newFingerprint) {
-            console.log("[SproutMod] ⚡ Config CHANGED — full re-scan");
-            document.querySelectorAll("[" + PROCESSED_ATTR + "]").forEach(function (el) { el.removeAttribute(PROCESSED_ATTR); });
-            document.querySelectorAll("." + BADGE_CLASS).forEach(function (el) { el.remove(); });
-            actions = {};
-            saveActions();
-            stats = { scanned: 0, flagged: 0, hidden: 0, completed: 0, lastScan: null, status: "running" };
-            lastCountersSent = null;
-            // DO NOT reset lastCheckedTimestamp or timestampLoaded here
-            // Config change means re-evaluate visible cards, but timestamp gate still applies
-            isScanning = false;
-            setTimeout(function () { scan(); }, 500);
+            console.log("[SproutMod] ⚡ Config CHANGED — applying for future messages (no auto-scan)");
           }
           prevConfigFingerprint = newFingerprint;
 
@@ -294,6 +293,97 @@
     return true;
   }
 
+  function getScrollParent(startEl) {
+    var el = startEl;
+    while (el && el !== document.body && el !== document.documentElement) {
+      try {
+        var cs = window.getComputedStyle(el);
+        var oy = cs && cs.overflowY ? cs.overflowY : "";
+        if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 4) return el;
+      } catch (_) {}
+      el = el.parentElement;
+    }
+    try { return document.scrollingElement || document.documentElement; } catch (_) {}
+    return document.documentElement;
+  }
+
+  function getMessageListScroller() {
+    var list = document.querySelector('[data-qa-name="message-list"]');
+    if (list) return getScrollParent(list);
+    var rows = getAllMessageRows();
+    if (rows && rows.length) return getScrollParent(rows[0]);
+    return getScrollParent(document.body);
+  }
+
+  function getRowsSignature() {
+    var rows = getAllMessageRows();
+    var count = rows ? rows.length : 0;
+    var first = "";
+    var last = "";
+    if (count > 0) {
+      first = getGuid(rows[0]) || "";
+      last = getGuid(rows[count - 1]) || "";
+    }
+    return String(count) + "|" + first + "|" + last;
+  }
+
+  async function waitForRowsSignatureChange(prevSig, maxWaitMs) {
+    var start = Date.now();
+    while (Date.now() - start < (maxWaitMs || 1600)) {
+      if (getRowsSignature() !== prevSig) return true;
+      await sleep(120 + Math.random() * 80);
+    }
+    return false;
+  }
+
+  async function scrollMessageListToTop() {
+    var scroller = getMessageListScroller();
+    try {
+      if (scroller && scroller !== document.scrollingElement && scroller !== document.documentElement) {
+        scroller.scrollTop = 0;
+      } else if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+      } else {
+        window.scrollTo(0, 0);
+      }
+    } catch (_) {}
+    await sleep(500);
+  }
+
+  async function scrollMessageListForward() {
+    var scroller = getMessageListScroller();
+    var beforeSig = getRowsSignature();
+    var beforeTop = 0;
+    try {
+      beforeTop = scroller && typeof scroller.scrollTop === "number" ? scroller.scrollTop : (document.scrollingElement ? document.scrollingElement.scrollTop : window.scrollY);
+    } catch (_) {}
+
+    var rows = getAllMessageRows();
+    var lastRow = rows && rows.length ? rows[rows.length - 1] : null;
+    if (lastRow) {
+      try { lastRow.scrollIntoView({ block: "end" }); } catch (_) {}
+    }
+
+    try {
+      if (scroller && typeof scroller.scrollTop === "number") {
+        scroller.scrollTop = scroller.scrollTop + Math.max(240, Math.floor(scroller.clientHeight * 0.85));
+      } else {
+        window.scrollBy(0, Math.max(240, Math.floor(window.innerHeight * 0.85)));
+      }
+    } catch (_) {}
+
+    await sleep(650 + Math.random() * 250);
+    var changed = await waitForRowsSignatureChange(beforeSig, 2200);
+    if (changed) return true;
+
+    try {
+      var afterTop = scroller && typeof scroller.scrollTop === "number" ? scroller.scrollTop : (document.scrollingElement ? document.scrollingElement.scrollTop : window.scrollY);
+      if (afterTop !== beforeTop) return true;
+    } catch (_) {}
+
+    return false;
+  }
+
   function getVisibleMenuContainers() {
     var menus = Array.prototype.slice.call(document.querySelectorAll('[role="menu"], ul[role="menu"]'));
     return menus.filter(isVisible);
@@ -336,6 +426,29 @@
     }
     if (typeof v === "number") return v === 1;
     return !!v;
+  }
+
+  function clearRowDecorations(row) {
+    try {
+      var existing = row.querySelectorAll("." + BADGE_CLASS);
+      existing.forEach(function (b) { b.remove(); });
+    } catch (_) {}
+    try {
+      var outer = row.querySelector("[data-qa-thread-item]") || row;
+      outer.style.borderLeft = "";
+      outer.style.paddingLeft = "";
+    } catch (_) {}
+  }
+
+  function reconcileRowGuid(row, guid) {
+    if (!guid) return;
+    var prev = row.getAttribute(GUID_ATTR);
+    if (prev && prev !== guid) {
+      row.removeAttribute(PROCESSED_ATTR);
+      row.removeAttribute(GUID_ATTR);
+      clearRowDecorations(row);
+    }
+    row.setAttribute(GUID_ATTR, guid);
   }
 
   // ===================== BADGE =====================
@@ -458,6 +571,18 @@
     }
 
     if (!hideItem) {
+      var allCandidates = [].concat(qaItems || [], (vis.roleItems || []));
+      for (var k2 = 0; k2 < allCandidates.length; k2++) {
+        var txt2 = ((allCandidates[k2].getAttribute && allCandidates[k2].getAttribute("data-qa-menu-item")) || allCandidates[k2].textContent || "").trim();
+        var l2 = txt2.toLowerCase();
+        if (l2.indexOf("hide") !== -1 && l2.indexOf("unhide") === -1) {
+          hideItem = allCandidates[k2];
+          break;
+        }
+      }
+    }
+
+    if (!hideItem) {
       moreBtn.click();
       vis = await waitForVisibleMenuItems(1600);
       qaItems = vis.qaItems;
@@ -475,9 +600,9 @@
       }
       if (!hideItem) {
         var role2 = vis.roleItems;
-        for (var k2 = 0; k2 < role2.length; k2++) {
-          var tx2 = (role2[k2].textContent || "").trim().toLowerCase();
-          if (tx2.startsWith("hide")) { hideItem = role2[k2]; break; }
+        for (var k3 = 0; k3 < role2.length; k3++) {
+          var tx2 = (role2[k3].textContent || "").trim().toLowerCase();
+          if (tx2.startsWith("hide")) { hideItem = role2[k3]; break; }
         }
       }
     }
@@ -599,32 +724,35 @@
           var doComplt   = kwActions.indexOf("complete") !== -1;
           if (kwActions.indexOf("both") !== -1) { doBadge = true; doAutoHide = true; }
 
-          console.log("[SproutMod] KW MATCH: \"" + kw.keyword + "\" → badge:" + doBadge + " hide:" + doAutoHide + " complete:" + doComplt);
+          var willAutoHide = doAutoHide || (doBadge && !!config.auto_hide_enabled);
+          var willComplete = doComplt || (doBadge && !!config.auto_complete_enabled);
+
+          console.log("[SproutMod] KW MATCH: \"" + kw.keyword + "\" → badge:" + doBadge + " hide:" + willAutoHide + " complete:" + willComplete);
 
           if (doBadge) {
             addBadge(row, kw.keyword, 1.0, true);
             result.flagged = true;
           }
 
-          if (doAutoHide) {
+          if (willAutoHide) {
             var hidden = await hideWithRetry(row);
             if (hidden) { result.hidden = true; }
             await sleep(300 + Math.random() * 200);
           }
 
-          if (doComplt) {
+          if (willComplete) {
             var completed = await doComplete(row);
             if (completed) { result.completed = true; }
           }
 
-          var actionTaken = result.hidden ? "hidden" : (doBadge ? "flagged" : (doComplt ? "completed" : "flagged"));
+          var actionTaken = result.hidden ? "hidden" : (result.completed ? "completed" : "flagged");
           row.setAttribute(PROCESSED_ATTR, "done-kw-" + rawAction.replace(/,/g, "-"));
           recordAction(guid, { action: actionTaken, category: kw.keyword, confidence: 1.0, keyword: kw.keyword });
 
-          if (doAutoHide && !doBadge) { result.flagged = true; }
+          if (willAutoHide && !doBadge) { result.flagged = true; }
 
           try {
-            if (doBadge || doAutoHide) {
+            if (doBadge || willAutoHide) {
               chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: {
                 message_id: guid, message_text: text, platform: platform,
                 action_taken: result.hidden ? "hidden" : "flagged", source: "keyword"
@@ -673,19 +801,13 @@
       var cat = aiData.highest_category || "flagged";
       var conf = aiData.confidence || 0.5;
 
-      var isDryRun        = !!(config && config.dry_run_mode);
-      var aiWantsHide     = !!(config && config.auto_hide_enabled);
-      var aiWantsComplete = !!(config && config.auto_complete_enabled);
-
-      var shouldHide     = aiWantsHide && !isDryRun;
-      var shouldComplete = aiWantsComplete && !isDryRun;
+      var shouldHide = !!(config && config.auto_hide_enabled) && (aiData.action === "hide");
+      var shouldComplete = !!(config && config.auto_complete_enabled) && !!aiData.should_complete;
 
       console.log("[SproutMod] AI FLAGGED:", cat, Math.round(conf * 100) + "%", guid,
-        "→ badge:" + isDryRun + " hide:" + shouldHide + " complete:" + shouldComplete + " dry_run:" + isDryRun);
+        "→ action:" + (aiData.action || "") + " hide:" + shouldHide + " complete:" + shouldComplete);
 
-      if (isDryRun) {
-        addBadge(row, cat, conf, false);
-      }
+      addBadge(row, cat, conf, false);
       result.flagged = true;
 
       if (shouldHide) {
@@ -732,6 +854,8 @@
 
   function restoreAction(row, data) {
     var action = data.action || "clean";
+    var guid = getGuid(row);
+    if (guid) reconcileRowGuid(row, guid);
     row.setAttribute(PROCESSED_ATTR, "restored-" + action);
 
     if (action === "clean" || action === "sent" || action === "empty") return;
@@ -743,24 +867,107 @@
     addBadge(row, label, conf, isKw);
   }
 
+  function restoreVisibleBadgesFromCache() {
+    var now = Date.now();
+    if (now - lastRestoreBadgesAt < 800) return;
+    lastRestoreBadgesAt = now;
+
+    var rows = getAllMessageRows();
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!isComment(row)) continue;
+
+      var guid = getGuid(row);
+      if (!guid) continue;
+      reconcileRowGuid(row, guid);
+
+      // Skip rows that already have our attribute AND have a badge (if needed)
+      if (row.hasAttribute(PROCESSED_ATTR)) {
+        // If it's flagged/hidden but badge is missing (DOM recycled), re-add badge
+        var cached0 = actions[guid];
+        if (cached0 && cached0.action !== "clean" && cached0.action !== "sent" && cached0.action !== "empty") {
+          if (!row.querySelector("." + BADGE_CLASS)) {
+            restoreAction(row, cached0);
+          }
+        }
+        continue;
+      }
+
+      var cached = actions[guid];
+      if (!cached) {
+        // Not in cache — mark old items so they don't keep triggering hasNew
+        var ts = getTimestamp(row);
+        if (ts > 0 && lastCheckedTimestamp > 0 && ts <= lastCheckedTimestamp) {
+          row.setAttribute(PROCESSED_ATTR, "skipped-old");
+        }
+        continue;
+      }
+
+      var action = cached.action || "clean";
+      if (action === "clean" || action === "sent" || action === "empty") {
+        // Mark with PROCESSED_ATTR so recycled DOM stops appearing as "new"
+        row.setAttribute(PROCESSED_ATTR, "restored-" + action);
+        continue;
+      }
+
+      restoreAction(row, cached);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // FIX v5.2: checkForNewMessagesButton no longer returns a value
+  // that causes the caller to bail out of scan().  It just clicks
+  // the button, waits for content, and lets scan() continue.
+  // ──────────────────────────────────────────────────────────────
+  async function waitForTopTimestamps(maxWaitMs) {
+    var start = Date.now();
+    while (Date.now() - start < (maxWaitMs || 2500)) {
+      var rows = getAllMessageRows();
+      var ok = true;
+      var checked = 0;
+      for (var i = 0; i < rows.length && checked < 6; i++) {
+        var r = rows[i];
+        if (!isComment(r)) continue;
+        var ts = getTimestamp(r);
+        if (!(ts > 0)) { ok = false; break; }
+        checked++;
+      }
+      if (checked > 0 && ok) return true;
+      await sleep(120 + Math.random() * 60);
+    }
+    return false;
+  }
+
   async function checkForNewMessagesButton() {
     var newMsgBtn = document.querySelector('button[data-qa-button*="New Message"]');
     if (newMsgBtn && isVisible(newMsgBtn)) {
+      var prevSig = getRowsSignature();
       console.log("[SproutMod] Found 'New Messages' notification, clicking...");
       newMsgBtn.click();
-      await sleep(2500); // Wait for content to load
-      
-      console.log("[SproutMod] Restarting scan (New Messages clicked)...");
-      isScanning = false;
-      scan();
+      lastNewMessagesClickAt = Date.now();
+      await sleep(700 + Math.random() * 300);
+      await waitForRowsSignatureChange(prevSig, 3500);
+      await waitForTopTimestamps(2500);
+      await sleep(300);
+      try { await loadConfig(); } catch (_) {}
       return true;
     }
     return false;
   }
 
-  async function scan() {
+  function shouldReplayOldItems() {
+    return lastNewMessagesClickAt && (Date.now() - lastNewMessagesClickAt < 20000);
+  }
+
+  async function scan(mode) {
     if (!config) return;
-    if (isScanning) return;
+
+    var requestedMode = mode || (fullScanComplete ? "visible" : "full");
+    if (isScanning) {
+      if (!pendingScanMode) pendingScanMode = requestedMode;
+      else if (pendingScanMode === "visible" && requestedMode === "full") pendingScanMode = "full";
+      return;
+    }
     isScanning = true;
 
     // ─── Fresh counters for this scan cycle ───
@@ -769,6 +976,7 @@
     var hiddenCount = 0;
     var completedCount = 0;
     var skippedCount = 0;
+    var replayedOldCount = 0;
 
     try {
       // ─── Fetch timestamp from server ONCE, then use local copy ───
@@ -779,120 +987,234 @@
         console.log("[SproutMod] Fetched last_checked_timestamp from server:", lastCheckedTimestamp);
       }
 
-      // ─── Get all comment rows ───
-      var rows = getAllMessageRows();
-      var commentRows = [];
-      for (var i0 = 0; i0 < rows.length; i0++) {
-        if (isComment(rows[i0])) commentRows.push(rows[i0]);
-      }
-
-      // ─── Quick exit: nothing unprocessed in DOM ───
-      var hasUnprocessed = false;
-      for (var chk = 0; chk < commentRows.length; chk++) {
-        if (!commentRows[chk].hasAttribute(PROCESSED_ATTR)) {
-          hasUnprocessed = true;
-          break;
-        }
-      }
-      if (!hasUnprocessed) {
-        // Even if no unprocessed items, check for "New Messages" button
-        if (await checkForNewMessagesButton()) return;
-        isScanning = false;
-        return;
-      }
-
-      // ─── Find the highest timestamp in the current DOM ───
-      // If DB timestamp >= highest card timestamp, ALL cards are old → skip entire scan
-      // BUT: We must check if any "old" card is actually unbadged (re-rendered).
-      // If it's unbadged but we have a cached action, we should restore it.
-      var highestCardTimestamp = 0;
-      for (var t = 0; t < commentRows.length; t++) {
-        var ts = getTimestamp(commentRows[t]);
-        if (ts > highestCardTimestamp) highestCardTimestamp = ts;
-      }
-
-      var allOld = (lastCheckedTimestamp > 0 && highestCardTimestamp > 0 && highestCardTimestamp <= lastCheckedTimestamp);
-
-      if (allOld) {
-        console.log("[SproutMod] All cards seem old (highest:", highestCardTimestamp, "≤ db:", lastCheckedTimestamp, ")");
-        
-        // Check for "New Messages" button before skipping
-        if (await checkForNewMessagesButton()) return;
-
-        // Instead of blindly skipping, check if we have cached actions for them
-        var anyRestored = false;
-        for (var s = 0; s < commentRows.length; s++) {
-          if (commentRows[s].hasAttribute(PROCESSED_ATTR)) continue;
-          
-          var g = getGuid(commentRows[s]);
-          if (g && actions[g]) {
-             // We have processed this before! Restore badge/state.
-             restoreAction(commentRows[s], actions[g]);
-             anyRestored = true;
-          } else {
-             // Truly old and unknown? Or maybe we missed it?
-             // If we missed it, we should probably process it.
-             // But if we process it, we might duplicate logs?
-             // For now, if it's old and NOT in actions, we assume it was processed before we started tracking actions or clean.
-             // Safest is to mark as skipped-old to avoid infinite loops on old stuff.
-             commentRows[s].setAttribute(PROCESSED_ATTR, "skipped-old");
-          }
-        }
-        
-        if (anyRestored) {
-          console.log("[SproutMod] Restored cached actions for re-rendered old items");
-        }
-
-        isScanning = false;
-        return;
-      }
-
+      var desiredMode = requestedMode;
       var highestProcessedTimestamp = lastCheckedTimestamp;
 
-      // ─── Loop through each comment card sequentially ───
-      for (var i = 0; i < commentRows.length; i++) {
-        var row = commentRows[i];
-        var guid = getGuid(row);
-        if (!guid) continue;
+      await checkForNewMessagesButton();
 
-        // Already processed in DOM — skip completely
-        if (row.hasAttribute(PROCESSED_ATTR)) continue;
+      if (desiredMode === "full") {
+        await scrollMessageListToTop();
 
-        // Extract timestamp
-        var cardTimestamp = getTimestamp(row);
+        var seenGuidsThisScan = {};
+        var stagnantScrolls = 0;
 
-        // Timestamp gate: skip old cards
-        if (cardTimestamp > 0 && lastCheckedTimestamp > 0 && cardTimestamp <= lastCheckedTimestamp) {
-          var cached = actions[guid];
-          if (cached) {
-            restoreAction(row, cached);
-          } else {
-            row.setAttribute(PROCESSED_ATTR, "skipped-old");
+        for (var pass = 0; pass < 80; pass++) {
+          var rows = getAllMessageRows();
+          var commentRows = [];
+          for (var i0 = 0; i0 < rows.length; i0++) {
+            if (isComment(rows[i0])) commentRows.push(rows[i0]);
           }
-          skippedCount++;
-          continue;
+
+          if (commentRows.length === 0) {
+            var advanced0 = await scrollMessageListForward();
+            if (!advanced0) break;
+            await sleep(450);
+            continue;
+          }
+
+          var highestCardTimestamp = 0;
+          var hasAnyUnprocessed = false;
+
+          for (var t = 0; t < commentRows.length; t++) {
+            var ts = getTimestamp(commentRows[t]);
+            if (ts > highestCardTimestamp) highestCardTimestamp = ts;
+            if (!commentRows[t].hasAttribute(PROCESSED_ATTR)) hasAnyUnprocessed = true;
+          }
+
+          var allOld = (lastCheckedTimestamp > 0 && highestCardTimestamp > 0 && highestCardTimestamp <= lastCheckedTimestamp);
+          if (allOld) {
+            var anyRestored = false;
+            for (var s = 0; s < commentRows.length; s++) {
+              var row0 = commentRows[s];
+              if (row0.hasAttribute(PROCESSED_ATTR)) continue;
+              var g0 = getGuid(row0);
+              if (!g0) continue;
+              if (actions[g0]) {
+                restoreAction(row0, actions[g0]);
+                anyRestored = true;
+              } else if (replayedOldCount < 8 && shouldReplayOldItems()) {
+                replayedOldCount++;
+                try {
+                  await processRow(row0);
+                } catch (_) {
+                  row0.setAttribute(PROCESSED_ATTR, "error");
+                }
+              } else {
+                row0.setAttribute(PROCESSED_ATTR, "skipped-old");
+              }
+              seenGuidsThisScan[g0] = true;
+            }
+            if (anyRestored) console.log("[SproutMod] Restored cached actions for old items");
+          } else if (hasAnyUnprocessed) {
+            for (var i = 0; i < commentRows.length; i++) {
+              var row = commentRows[i];
+              var guid = getGuid(row);
+              if (!guid) continue;
+
+              if (row.hasAttribute(PROCESSED_ATTR)) {
+                seenGuidsThisScan[guid] = true;
+                continue;
+              }
+
+              if (seenGuidsThisScan[guid]) {
+                var cached2 = actions[guid];
+                if (cached2) {
+                  restoreAction(row, cached2);
+                } else {
+                  row.setAttribute(PROCESSED_ATTR, "skipped-dup");
+                }
+                continue;
+              }
+              seenGuidsThisScan[guid] = true;
+
+              var cardTimestamp = getTimestamp(row);
+
+              if (cardTimestamp > 0 && lastCheckedTimestamp > 0 && cardTimestamp <= lastCheckedTimestamp) {
+                var cached = actions[guid];
+                if (cached) {
+                  restoreAction(row, cached);
+                  skippedCount++;
+                  continue;
+                }
+                if (replayedOldCount < 8 && shouldReplayOldItems()) {
+                  replayedOldCount++;
+                  try {
+                    await processRow(row);
+                  } catch (_) {
+                    row.setAttribute(PROCESSED_ATTR, "error");
+                  }
+                } else {
+                  row.setAttribute(PROCESSED_ATTR, "skipped-old");
+                  skippedCount++;
+                }
+                continue;
+              }
+
+              scanCount++;
+              console.log("[SproutMod] NEW:", guid, "ts:", cardTimestamp);
+
+              try {
+                var outcome = await processRow(row);
+                if (outcome.flagged) flaggedCount++;
+                if (outcome.hidden) hiddenCount++;
+                if (outcome.completed) completedCount++;
+              } catch (rowErr) {
+                console.warn("[SproutMod] Error processing row:", guid, rowErr);
+                row.setAttribute(PROCESSED_ATTR, "error");
+              }
+
+              var effectiveTs = cardTimestamp > 0 ? cardTimestamp : Math.floor(Date.now() / 1000);
+              if (effectiveTs > highestProcessedTimestamp) highestProcessedTimestamp = effectiveTs;
+
+              await sleep(280 + Math.random() * 140);
+            }
+          }
+
+          var advanced = await scrollMessageListForward();
+          if (!advanced) {
+            stagnantScrolls++;
+            if (stagnantScrolls >= 2) break;
+          } else {
+            stagnantScrolls = 0;
+          }
         }
 
-        // ─── This is a NEW card — process it ───
-        scanCount++;
-        console.log("[SproutMod] NEW:", guid, "ts:", cardTimestamp);
-
-        try {
-          var outcome = await processRow(row);
-          if (outcome.flagged)   flaggedCount++;
-          if (outcome.hidden)    hiddenCount++;
-          if (outcome.completed) completedCount++;
-        } catch (rowErr) {
-          console.warn("[SproutMod] Error processing row:", guid, rowErr);
-          row.setAttribute(PROCESSED_ATTR, "error");
+        fullScanComplete = true;
+      } else {
+        var rowsStartV = getAllMessageRows();
+        var sessionUpperTs = 0;
+        for (var sV = 0; sV < rowsStartV.length; sV++) {
+          var rS = rowsStartV[sV];
+          if (!isComment(rS)) continue;
+          if (rS.hasAttribute(PROCESSED_ATTR)) continue;
+          var tsS = getTimestamp(rS);
+          if (tsS > 0 && (lastCheckedTimestamp <= 0 || tsS > lastCheckedTimestamp) && tsS > sessionUpperTs) sessionUpperTs = tsS;
         }
 
-        // Track highest
-        if (cardTimestamp > highestProcessedTimestamp) {
-          highestProcessedTimestamp = cardTimestamp;
-        }
+        var processedThisCycle = {};
+        var maxPasses = 40; // safety cap
 
-        await sleep(300);
+        for (var passV = 0; passV < maxPasses; passV++) {
+          var rowsV = getAllMessageRows();
+          var foundWork = false;
+
+          for (var iV = 0; iV < rowsV.length; iV++) {
+            var rowV = rowsV[iV];
+            if (!isComment(rowV)) continue;
+
+            var guidV = getGuid(rowV);
+            if (!guidV) continue;
+            if (rowV.hasAttribute(PROCESSED_ATTR)) continue;
+            if (processedThisCycle[guidV]) continue;
+
+            var cardTimestampV = getTimestamp(rowV);
+
+            // Prevent processing timestamp-less rows after we have a timestamp gate.
+            if (lastCheckedTimestamp > 0 && !(cardTimestampV > 0)) {
+              rowV.setAttribute(PROCESSED_ATTR, "skipped-no-ts");
+              skippedCount++;
+              continue;
+            }
+
+            // Only process items genuinely newer than lastCheckedTimestamp.
+            if (cardTimestampV > 0 && lastCheckedTimestamp > 0 && cardTimestampV <= lastCheckedTimestamp) {
+              var cachedV = actions[guidV];
+              if (cachedV) {
+                restoreAction(rowV, cachedV);
+                skippedCount++;
+                continue;
+              }
+              if (replayedOldCount < 8 && shouldReplayOldItems()) {
+                replayedOldCount++;
+                processedThisCycle[guidV] = true;
+                foundWork = true;
+                try {
+                  await processRow(rowV);
+                } catch (_) {
+                  rowV.setAttribute(PROCESSED_ATTR, "error");
+                }
+                await sleep(400 + Math.random() * 200);
+                break;
+              } else {
+                rowV.setAttribute(PROCESSED_ATTR, "skipped-old");
+                skippedCount++;
+              }
+              continue;
+            }
+
+            if (sessionUpperTs > 0 && cardTimestampV > sessionUpperTs) {
+              if (!pendingScanMode) pendingScanMode = "visible";
+              continue;
+            }
+
+            // Found a genuinely new item
+            processedThisCycle[guidV] = true;
+            foundWork = true;
+            scanCount++;
+            console.log("[SproutMod] NEW:", guidV, "ts:", cardTimestampV);
+
+            try {
+              var outcomeV = await processRow(rowV);
+              if (outcomeV.flagged) flaggedCount++;
+              if (outcomeV.hidden) hiddenCount++;
+              if (outcomeV.completed) completedCount++;
+            } catch (rowErrV) {
+              console.warn("[SproutMod] Error processing row:", guidV, rowErrV);
+              rowV.setAttribute(PROCESSED_ATTR, "error");
+            }
+
+            var effectiveTsV = cardTimestampV > 0 ? cardTimestampV : Math.floor(Date.now() / 1000);
+            if (effectiveTsV > highestProcessedTimestamp) highestProcessedTimestamp = effectiveTsV;
+
+            // ── After each hide+complete, wait for DOM to settle,
+            //    then BREAK inner loop and re-query fresh DOM ──
+            await sleep(400 + Math.random() * 200);
+            break;
+          }
+
+          // If inner loop found no work, we're done
+          if (!foundWork) break;
+        }
       }
 
       // ─── Save highest timestamp locally + to server ───
@@ -945,13 +1267,20 @@
         console.log("[SproutMod] Scan: all", skippedCount, "cards skipped (already processed)");
       }
 
-      // ─── Check for "New Messages" button at the end ───
-      if (await checkForNewMessagesButton()) return;
+      var clickedAfter = await checkForNewMessagesButton();
+      if (clickedAfter) {
+        if (!pendingScanMode) pendingScanMode = "visible";
+      }
 
     } catch (scanErr) {
       console.error("[SproutMod] Scan error:", scanErr);
     } finally {
       isScanning = false;
+      if (pendingScanMode) {
+        var nextMode = pendingScanMode;
+        pendingScanMode = null;
+        scan(nextMode);
+      }
     }
   }
 
@@ -959,6 +1288,33 @@
     try {
       chrome.runtime.sendMessage({ type: "STATS_UPDATE", data: stats });
     } catch (e) { /* popup closed */ }
+  }
+
+  // ===================== GENUINELY-NEW CHECK =====================
+  // Distinguishes truly new messages from recycled DOM elements
+  // that lost their PROCESSED_ATTR due to Sprout's virtual list.
+
+  function hasGenuinelyNewItems() {
+    var rows = getAllMessageRows();
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (row.hasAttribute(PROCESSED_ATTR)) continue;
+      if (!isComment(row)) continue;
+
+      var guid = getGuid(row);
+      if (!guid) continue;
+
+      // Already in our action cache → recycled DOM, not new
+      if (actions[guid]) continue;
+
+      // Timestamp older than or equal to our gate → old item, not new
+      var ts = getTimestamp(row);
+      if (ts > 0 && lastCheckedTimestamp > 0 && ts <= lastCheckedTimestamp) continue;
+
+      // This item is genuinely new — needs processing
+      return true;
+    }
+    return false;
   }
 
   // ===================== OBSERVER =====================
@@ -1002,6 +1358,22 @@
 
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function () {
+        if (isScanning) {
+          var btn0 = document.querySelector('button[data-qa-button*="New Message"]');
+          var hasBtn0 = btn0 && isVisible(btn0);
+          if (hasBtn0) {
+            pendingScanMode = pendingScanMode === "full" ? "full" : "visible";
+            return;
+          }
+          if (fullScanComplete) {
+            if (hasGenuinelyNewItems()) {
+              pendingScanMode = pendingScanMode === "full" ? "full" : "visible";
+            }
+            return;
+          }
+          pendingScanMode = "full";
+          return;
+        }
         var rows = getAllMessageRows();
         var hasNew = false;
         for (var i = 0; i < rows.length; i++) {
@@ -1015,9 +1387,28 @@
         var newMsgBtn = document.querySelector('button[data-qa-button*="New Message"]');
         var hasButton = newMsgBtn && isVisible(newMsgBtn);
 
-        if (hasNew || hasButton) {
-          console.log("[SproutMod] Observer: genuinely new items or New Messages button detected");
-          scan();
+        if (hasButton) {
+          console.log("[SproutMod] Observer: New Messages button detected");
+          // FIX v5.2: always trigger a visible scan — checkForNewMessagesButton()
+          // is called INSIDE scan() now, so no need to call it separately here.
+          scan("visible");
+          return;
+        }
+
+        // ── FIX v5.3: after fullScanComplete, restore badges for recycled
+        //    DOM elements and only trigger scan for genuinely new items ──
+        if (fullScanComplete) {
+          restoreVisibleBadgesFromCache();
+          if (hasGenuinelyNewItems()) {
+            console.log("[SproutMod] Observer: genuinely new items detected, running visible scan");
+            scan("visible");
+          }
+          return;
+        }
+
+        if (!fullScanComplete && hasNew) {
+          console.log("[SproutMod] Observer: new items detected (pre-full-scan)");
+          scan("full");
         }
       }, 1200);
     });
@@ -1031,6 +1422,21 @@
 
   function startPolling() {
     setInterval(function () {
+      if (isScanning) {
+        var btn0 = document.querySelector('button[data-qa-button*="New Message"]');
+        var hasBtn0 = btn0 && isVisible(btn0);
+        if (hasBtn0) {
+          pendingScanMode = pendingScanMode === "full" ? "full" : "visible";
+          return;
+        }
+        if (fullScanComplete) {
+          if (hasGenuinelyNewItems()) {
+            pendingScanMode = pendingScanMode === "full" ? "full" : "visible";
+          }
+          return;
+        }
+        return;
+      }
       var rows = getAllMessageRows();
       var hasNew = false;
       for (var i = 0; i < rows.length; i++) {
@@ -1044,9 +1450,27 @@
       var newMsgBtn = document.querySelector('button[data-qa-button*="New Message"]');
       var hasButton = newMsgBtn && isVisible(newMsgBtn);
 
-      if (hasNew || hasButton) {
-        console.log("[SproutMod] Poll: found unprocessed items or New Messages button");
-        scan();
+      if (hasButton) {
+        console.log("[SproutMod] Poll: New Messages button detected");
+        // FIX v5.2: trigger scan directly — button click happens inside scan()
+        scan("visible");
+        return;
+      }
+
+      // ── FIX v5.3: restore badges for recycled DOM elements
+      //    and only trigger scan for genuinely new items ──
+      if (fullScanComplete) {
+        restoreVisibleBadgesFromCache();
+        if (hasGenuinelyNewItems()) {
+          console.log("[SproutMod] Poll: genuinely new items detected, running visible scan");
+          scan("visible");
+        }
+        return;
+      }
+
+      if (!fullScanComplete && hasNew) {
+        console.log("[SproutMod] Poll: found unprocessed items (pre-full-scan)");
+        scan("full");
       }
     }, POLL_INTERVAL);
   }
@@ -1064,7 +1488,8 @@
       document.querySelectorAll("." + BADGE_CLASS).forEach(function (el) { el.remove(); });
       lastCheckedTimestamp = 0;
       timestampLoaded = false; // Re-fetch from server
-      scan();
+      fullScanComplete = false;
+      scan("full");
       sendResponse({ ok: true });
       return true;
     }
@@ -1076,7 +1501,8 @@
       document.querySelectorAll("." + BADGE_CLASS).forEach(function (el) { el.remove(); });
       lastCheckedTimestamp = 0;
       timestampLoaded = false; // Re-fetch from server
-      scan();
+      fullScanComplete = false;
+      scan("full");
       sendResponse({ ok: true });
       return true;
     }
@@ -1091,7 +1517,7 @@
 
   async function init() {
     console.log("[SproutMod] ========================================");
-    console.log("[SproutMod]  Sprout Social AI Moderator v5.1");
+    console.log("[SproutMod]  Sprout Social AI Moderator v5.3");
     console.log("[SproutMod]  Timestamp-gated processing");
     console.log("[SproutMod] ========================================");
 
@@ -1155,7 +1581,8 @@
     }
 
     stats.status = "running";
-    await scan();
+    fullScanComplete = false;
+    await scan("full");
     startObserver();
     startPolling();
     setInterval(loadConfig, CONFIG_REFRESH_INTERVAL);
