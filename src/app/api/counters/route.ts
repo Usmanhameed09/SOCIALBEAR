@@ -18,6 +18,10 @@ export async function POST(req: NextRequest) {
       flagged_total,
       auto_hidden_total,
       completed_total,
+      today_processed_increment,
+      today_flagged_increment,
+      today_auto_hidden_increment,
+      today_completed_increment,
     } = body as {
       total_processed?: number;
       flagged_current?: number;
@@ -26,13 +30,19 @@ export async function POST(req: NextRequest) {
       flagged_total?: number;
       auto_hidden_total?: number;
       completed_total?: number;
+      today_processed_increment?: number;
+      today_flagged_increment?: number;
+      today_auto_hidden_increment?: number;
+      today_completed_increment?: number;
     };
 
     const supabase = createAdminClient();
 
     const { data: existing, error: selectErr } = await supabase
       .from("moderation_counters")
-      .select("total_processed, flagged, auto_hidden, completed")
+      .select(
+        "total_processed, flagged, auto_hidden, completed, today_processed, today_flagged, today_auto_hidden, today_completed"
+      )
       .eq("user_id", user.id)
       .single();
 
@@ -63,6 +73,18 @@ export async function POST(req: NextRequest) {
         typeof completed_total === "number"
           ? completed_total
           : (existing?.completed ?? 0) + (completed_increment ?? 0),
+      today_processed:
+        (((existing as { today_processed?: number } | null)?.today_processed ?? 0) +
+          (today_processed_increment ?? 0)),
+      today_flagged:
+        (((existing as { today_flagged?: number } | null)?.today_flagged ?? 0) +
+          (today_flagged_increment ?? 0)),
+      today_auto_hidden:
+        (((existing as { today_auto_hidden?: number } | null)?.today_auto_hidden ?? 0) +
+          (today_auto_hidden_increment ?? 0)),
+      today_completed:
+        (((existing as { today_completed?: number } | null)?.today_completed ?? 0) +
+          (today_completed_increment ?? 0)),
       updated_at: new Date().toISOString(),
     };
 
