@@ -29,7 +29,9 @@ export default function DashboardPage() {
 
     const { data: counters, error: countersErr } = await supabase
       .from("moderation_counters")
-      .select("total_processed, flagged, auto_hidden, completed, updated_at")
+      .select(
+        "total_processed, flagged, auto_hidden, completed, updated_at, today_processed, today_flagged, today_auto_hidden, today_completed"
+      )
       .eq("user_id", user.id)
       .single();
 
@@ -49,8 +51,10 @@ export default function DashboardPage() {
         total_hidden: counters.auto_hidden ?? 0,
         total_flagged: counters.flagged ?? 0,
         total_completed: counters.completed ?? 0,
-        today_processed: 0,
-        today_hidden: 0,
+        today_processed: counters.today_processed ?? 0,
+        today_hidden: counters.today_auto_hidden ?? 0,
+        today_flagged: counters.today_flagged ?? 0,
+        today_completed: counters.today_completed ?? 0,
         last_processed: counters.updated_at ?? null,
         active_keywords: activeKeywords,
       } as DashboardStats);
@@ -121,12 +125,14 @@ export default function DashboardPage() {
           value={stats?.total_flagged ?? 0}
           icon={AlertTriangle}
           color="orange"
+          subtitle={`${stats?.today_flagged ?? 0} today`}
         />
         <StatCard
           label="Completed"
           value={stats?.total_completed ?? 0}
           icon={CheckCircle2}
           color="green"
+          subtitle={`${stats?.today_completed ?? 0} today`}
         />
       </div>
 

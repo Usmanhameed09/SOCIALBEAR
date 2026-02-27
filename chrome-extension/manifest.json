@@ -11,7 +11,17 @@
   "content_scripts": [
     {
       "matches": ["https://app.sproutsocial.com/*"],
-      "js": ["src/content.js"],
+      "js": [
+        "src/content/state.js",
+        "src/content/persistence.js",
+        "src/content/config.js",
+        "src/content/dom.js",
+        "src/content/ui.js",
+        "src/content/actions.js",
+        "src/content/moderation.js",
+        "src/content/scanner.js",
+        "src/content/index.js"
+      ],
       "css": ["src/content.css"],
       "run_at": "document_idle"
     }

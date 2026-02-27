@@ -55,6 +55,8 @@ export interface DashboardStats {
   total_completed: number;
   today_processed: number;
   today_hidden: number;
+  today_flagged: number;
+  today_completed: number;
   last_processed: string | null;
   active_keywords: number;
 }
