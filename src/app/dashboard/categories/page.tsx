@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase-browser";
 import {
   Plus,
@@ -28,11 +28,82 @@ interface Category {
   confidence_threshold: number;
 }
 
+function normalizeCategoryKey(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parseBulkCategoryText(text: string) {
+  const errors: string[] = [];
+  const items: Array<{ key: string; threshold: number; description: string }> = [];
+
+  const normalized = (text || "").trim();
+  if (!normalized) return { items, errors: ["Paste at least one category entry."] };
+
+  const matches = Array.from(
+    normalized.matchAll(
+      /\(\s*label\s*:\s*([^,]+?)\s*,\s*threshold\s*:\s*([0-9]*\.?[0-9]+)\s*\)\s*\.\s*/gi
+    )
+  );
+
+  if (matches.length === 0) {
+    return { items, errors: ['No entries found. Expected format like "(label: spam, threshold: 0.85). Description"'] };
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    const labelRaw = String(m[1] || "");
+    const thresholdRaw = String(m[2] || "");
+    const threshold = Number(thresholdRaw);
+    const start = (m.index ?? 0) + m[0].length;
+    const end = i + 1 < matches.length ? (matches[i + 1].index ?? normalized.length) : normalized.length;
+    const description = normalized.slice(start, end).trim();
+    const key = normalizeCategoryKey(labelRaw);
+
+    if (!key) {
+      errors.push(`Invalid label: "${labelRaw}"`);
+      continue;
+    }
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      errors.push(`Invalid threshold for "${key}": "${thresholdRaw}" (expected 0.0–1.0)`);
+      continue;
+    }
+    if (!description) {
+      errors.push(`Missing description for "${key}"`);
+      continue;
+    }
+
+    items.push({ key, threshold, description });
+  }
+
+  const deduped = new Map<string, { key: string; threshold: number; description: string }>();
+  for (const item of items) deduped.set(item.key, item);
+
+  return { items: Array.from(deduped.values()), errors };
+}
+
 const BRAND_GROUPS: Record<string, { label: string; icon: React.ElementType; keys: string[] }> = {
   general: {
     label: "General Moderation Logic",
     icon: Shield,
-    keys: ["profanity", "lgbtqia_attack", "violent_language", "racism", "boycott_criticism", "sexual_content", "spam"],
+    keys: [
+      "profanity",
+      "lgbtqia_attack",
+      "violent_language",
+      "racism",
+      "dogwhistle_racism",
+      "body_shaming",
+      "child_protection",
+      "identity_politics",
+      "boycott_criticism",
+      "sexual_content",
+      "spam",
+    ],
   },
   food_health: {
     label: "Food & Health — Olive, Goodfood, Nutracheck",
@@ -60,7 +131,13 @@ export default function CategoriesPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ key: "", label: "", description: "", confidence_threshold: 0.8 });
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; label: string } | null>(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkSaving, setBulkSaving] = useState(false);
   const supabase = createClient();
+
+  const bulkParsed = useMemo(() => parseBulkCategoryText(bulkText), [bulkText]);
 
   const fetchCategories = useCallback(async () => {
     setLoading(true);
@@ -176,6 +253,47 @@ export default function CategoriesPage() {
     }
   }
 
+  async function bulkImportCategories() {
+    setBulkError(null);
+    const { items, errors } = bulkParsed;
+    if (errors.length > 0) {
+      setBulkError(errors[0]);
+      return;
+    }
+    if (items.length === 0) {
+      setBulkError("Paste at least one category entry.");
+      return;
+    }
+
+    setBulkSaving(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      setBulkSaving(false);
+      return;
+    }
+
+    const res = await fetch("/api/categories", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ bulk_text: bulkText }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setBulkError(data?.error || "Bulk import failed.");
+      setBulkSaving(false);
+      return;
+    }
+
+    await fetchCategories();
+    setBulkText("");
+    setShowBulkImport(false);
+    setBulkSaving(false);
+  }
+
   function getGroupedCategories() {
     const grouped: Record<string, Category[]> = {};
     const ungrouped: Category[] = [];
@@ -208,14 +326,91 @@ export default function CategoriesPage() {
             {activeCount} of {categories.length} categories active — GPT-4o analyses each comment against all active categories
           </p>
         </div>
-        <button
-          onClick={() => setShowAdd(!showAdd)}
-          className="flex items-center gap-2 bg-brand-500 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-brand-600 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Add Category
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowBulkImport(!showBulkImport)}
+            className="flex items-center gap-2 bg-surface-100 text-surface-700 px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-surface-200 transition-colors"
+          >
+            Bulk Import
+          </button>
+          <button
+            onClick={() => setShowAdd(!showAdd)}
+            className="flex items-center gap-2 bg-brand-500 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-brand-600 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Add Category
+          </button>
+        </div>
       </div>
+
+      {showBulkImport && (
+        <div className="bg-white rounded-2xl border border-surface-200 p-6 mb-6">
+          <h3 className="font-semibold text-surface-800 mb-1">Bulk Import</h3>
+          <p className="text-xs text-surface-500 mb-4">
+            Paste categories in the exact format: (label: spam, threshold: 0.85). Description
+          </p>
+
+          <textarea
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            rows={10}
+            className="w-full border border-surface-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 font-mono"
+            placeholder={`(label: spam, threshold: 0.85). Promotional spam or scam requests. Allow legitimate support replies.\n(label: profanity, threshold: 0.85). Explicit profanity language...`}
+          />
+
+          <div className="flex items-center justify-between mt-3">
+            <div className="text-xs text-surface-500">
+              {bulkParsed.errors.length > 0
+                ? `${bulkParsed.errors.length} issue(s) found`
+                : `${bulkParsed.items.length} categories parsed`}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowBulkImport(false);
+                  setBulkError(null);
+                }}
+                className="text-surface-500 px-4 py-2 rounded-xl text-sm hover:text-surface-700"
+                disabled={bulkSaving}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={bulkImportCategories}
+                className="bg-brand-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-brand-600 transition-colors disabled:opacity-60 disabled:hover:bg-brand-500"
+                disabled={bulkSaving || bulkParsed.errors.length > 0 || bulkParsed.items.length === 0}
+              >
+                {bulkSaving ? "Importing..." : "Import / Update"}
+              </button>
+            </div>
+          </div>
+
+          {(bulkError || bulkParsed.errors.length > 0) && (
+            <div className="mt-3 text-xs text-red-600">
+              {bulkError || bulkParsed.errors[0]}
+            </div>
+          )}
+
+          {bulkParsed.errors.length === 0 && bulkParsed.items.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {bulkParsed.items.slice(0, 8).map((c) => (
+                <div
+                  key={c.key}
+                  className="border border-surface-200 rounded-lg px-3 py-2 text-xs text-surface-600 flex items-center justify-between"
+                >
+                  <span className="font-mono">{c.key}</span>
+                  <span className="text-surface-400">{c.threshold}</span>
+                </div>
+              ))}
+              {bulkParsed.items.length > 8 && (
+                <div className="text-xs text-surface-400 flex items-center px-2">
+                  +{bulkParsed.items.length - 8} more
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add form */}
       {showAdd && (

@@ -2,6 +2,86 @@ import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/auth-helper";
 import { createAdminClient } from "@/lib/supabase-admin";
 
+function normalizeCategoryKey(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function displayLabelFromKey(key: string) {
+  const acronyms = new Map<string, string>([
+    ["ai", "AI"],
+    ["ev", "EV"],
+    ["lgbtqia", "LGBTQIA"],
+  ]);
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((part) => {
+      const normalized = part.toLowerCase();
+      const acr = acronyms.get(normalized);
+      if (acr) return acr;
+      return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    })
+    .join(" ");
+}
+
+function parseBulkCategoryText(text: string) {
+  const normalized = (text || "").trim();
+  if (!normalized) return { items: [], errors: ["bulk_text is empty"] };
+
+  const matches = Array.from(
+    normalized.matchAll(
+      /\(\s*label\s*:\s*([^,]+?)\s*,\s*threshold\s*:\s*([0-9]*\.?[0-9]+)\s*\)\s*\.\s*/gi
+    )
+  );
+
+  if (matches.length === 0) {
+    return {
+      items: [],
+      errors: ['No entries found. Expected format like "(label: spam, threshold: 0.85). Description"'],
+    };
+  }
+
+  const errors: string[] = [];
+  const items: Array<{ key: string; threshold: number; description: string }> = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    const labelRaw = String(m[1] || "");
+    const thresholdRaw = String(m[2] || "");
+    const threshold = Number(thresholdRaw);
+    const start = (m.index ?? 0) + m[0].length;
+    const end = i + 1 < matches.length ? (matches[i + 1].index ?? normalized.length) : normalized.length;
+    const description = normalized.slice(start, end).trim();
+    const key = normalizeCategoryKey(labelRaw);
+
+    if (!key) {
+      errors.push(`Invalid label: "${labelRaw}"`);
+      continue;
+    }
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      errors.push(`Invalid threshold for "${key}": "${thresholdRaw}" (expected 0.0–1.0)`);
+      continue;
+    }
+    if (!description) {
+      errors.push(`Missing description for "${key}"`);
+      continue;
+    }
+
+    items.push({ key, threshold, description });
+  }
+
+  const deduped = new Map<string, { key: string; threshold: number; description: string }>();
+  for (const item of items) deduped.set(item.key, item);
+
+  return { items: Array.from(deduped.values()), errors };
+}
+
 // GET — list all categories for user
 export async function GET(req: NextRequest) {
   try {
@@ -42,6 +122,93 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
+    if (typeof body?.bulk_text === "string") {
+      const parsed = parseBulkCategoryText(body.bulk_text);
+      if (parsed.errors.length > 0) {
+        return NextResponse.json(
+          { error: "Invalid bulk_text", details: parsed.errors },
+          { status: 400 }
+        );
+      }
+
+      const supabase = createAdminClient();
+      const { data: existing, error: existingErr } = await supabase
+        .from("moderation_categories")
+        .select("id, key, label, sort_order, is_active")
+        .eq("user_id", user.id);
+
+      if (existingErr) throw existingErr;
+
+      const existingByKey = new Map<string, { id: string; key: string; label: string; sort_order: number | null }>();
+      for (const row of existing || []) {
+        existingByKey.set(row.key, {
+          id: row.id,
+          key: row.key,
+          label: row.label,
+          sort_order: row.sort_order ?? null,
+        });
+      }
+
+      let maxSortOrder = 0;
+      for (const row of existing || []) {
+        const s = Number(row.sort_order) || 0;
+        if (s > maxSortOrder) maxSortOrder = s;
+      }
+
+      let updated = 0;
+      const inserts: Array<{
+        user_id: string;
+        key: string;
+        label: string;
+        description: string;
+        is_active: boolean;
+        sort_order: number;
+        confidence_threshold: number;
+      }> = [];
+
+      for (const item of parsed.items) {
+        const found = existingByKey.get(item.key);
+        if (found) {
+          const { error: updateErr } = await supabase
+            .from("moderation_categories")
+            .update({
+              description: item.description,
+              confidence_threshold: item.threshold,
+              is_active: true,
+            })
+            .eq("id", found.id)
+            .eq("user_id", user.id);
+          if (updateErr) throw updateErr;
+          updated++;
+        } else {
+          maxSortOrder += 1;
+          inserts.push({
+            user_id: user.id,
+            key: item.key,
+            label: displayLabelFromKey(item.key),
+            description: item.description,
+            is_active: true,
+            sort_order: maxSortOrder,
+            confidence_threshold: item.threshold,
+          });
+        }
+      }
+
+      let inserted = 0;
+      if (inserts.length > 0) {
+        const { error: insertErr } = await supabase.from("moderation_categories").insert(inserts);
+        if (insertErr) throw insertErr;
+        inserted = inserts.length;
+      }
+
+      return NextResponse.json({
+        success: true,
+        updated,
+        inserted,
+        keys: parsed.items.map((i) => i.key),
+      });
+    }
+
     const { key, label, description, is_active, sort_order, confidence_threshold } = body;
 
     if (!key || !label) {
@@ -53,7 +220,7 @@ export async function POST(req: NextRequest) {
       .from("moderation_categories")
       .insert({
         user_id: user.id,
-        key: key.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
+        key: normalizeCategoryKey(String(key)),
         label,
         description: description || "",
         is_active: is_active !== false,
