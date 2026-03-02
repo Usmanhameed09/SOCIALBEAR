@@ -41,6 +41,7 @@ export interface ModerationLog {
   message_id: string;
   platform: string;
   classification: Record<string, number>;
+  ai_message?: string | null;
   matched_keyword: string | null;
   action_taken: "flagged" | "hidden" | "completed" | "none";
   confidence: number;

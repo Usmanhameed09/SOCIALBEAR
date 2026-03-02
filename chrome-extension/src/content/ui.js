@@ -82,11 +82,10 @@ function restoreVisibleBadgesFromCache() {
   var rows = getAllMessageRows();
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    if (!isComment(row)) continue;
-
     var guid = getGuid(row);
-    if (!guid) continue;
     reconcileRowGuid(row, guid);
+    if (!isComment(row)) continue;
+    if (!guid) continue;
 
     // Skip rows that already have our attribute AND have a badge (if needed)
     if (row.hasAttribute(PROCESSED_ATTR)) {

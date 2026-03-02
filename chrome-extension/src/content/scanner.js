@@ -14,6 +14,8 @@ async function waitForTopTimestamps(maxWaitMs) {
     var checked = 0;
     for (var i = 0; i < rows.length && checked < 6; i++) {
       var r = rows[i];
+      var rg = getGuid(r);
+      if (rg) reconcileRowGuid(r, rg);
       if (!isComment(r)) continue;
       var ts = getTimestamp(r);
       if (!(ts > 0)) { ok = false; break; }
@@ -37,6 +39,7 @@ async function checkForNewMessagesButton() {
     await waitForTopTimestamps(2500);
     await sleep(300);
     try { await loadConfig(); } catch (_) {}
+    try { restoreVisibleBadgesFromCache(); } catch (_) {}
     return true;
   }
   return false;
@@ -89,6 +92,8 @@ async function scan(mode) {
         var rows = getAllMessageRows();
         var commentRows = [];
         for (var i0 = 0; i0 < rows.length; i0++) {
+          var gInit = getGuid(rows[i0]);
+          if (gInit) reconcileRowGuid(rows[i0], gInit);
           if (isComment(rows[i0])) commentRows.push(rows[i0]);
         }
 
@@ -103,6 +108,8 @@ async function scan(mode) {
         var hasAnyUnprocessed = false;
 
         for (var t = 0; t < commentRows.length; t++) {
+          var gT = getGuid(commentRows[t]);
+          if (gT) reconcileRowGuid(commentRows[t], gT);
           var ts = getTimestamp(commentRows[t]);
           if (ts > highestCardTimestamp) highestCardTimestamp = ts;
           if (!commentRows[t].hasAttribute(PROCESSED_ATTR)) hasAnyUnprocessed = true;
@@ -122,8 +129,9 @@ async function scan(mode) {
           var anyRestored = false;
           for (var s = 0; s < commentRows.length; s++) {
             var row0 = commentRows[s];
-            if (row0.hasAttribute(PROCESSED_ATTR)) continue;
             var g0 = getGuid(row0);
+            if (g0) reconcileRowGuid(row0, g0);
+            if (row0.hasAttribute(PROCESSED_ATTR)) continue;
             if (!g0) continue;
 
             var ts0 = getTimestamp(row0);
@@ -151,6 +159,7 @@ async function scan(mode) {
             var row = commentRows[i];
             var guid = getGuid(row);
             if (!guid) continue;
+            reconcileRowGuid(row, guid);
 
             if (row.hasAttribute(PROCESSED_ATTR)) {
               seenGuidsThisScan[guid] = true;
@@ -243,6 +252,8 @@ async function scan(mode) {
       var sessionUpperTs = 0;
       for (var sV = 0; sV < rowsStartV.length; sV++) {
         var rS = rowsStartV[sV];
+        var gS = getGuid(rS);
+        if (gS) reconcileRowGuid(rS, gS);
         if (!isComment(rS)) continue;
         if (rS.hasAttribute(PROCESSED_ATTR)) continue;
         var tsS = getTimestamp(rS);
@@ -258,11 +269,11 @@ async function scan(mode) {
 
         for (var iV = 0; iV < rowsV.length; iV++) {
           var rowV = rowsV[iV];
-          if (!isComment(rowV)) continue;
-
           var guidV = getGuid(rowV);
-          if (!guidV) continue;
+          if (guidV) reconcileRowGuid(rowV, guidV);
           if (rowV.hasAttribute(PROCESSED_ATTR)) continue;
+          if (!isComment(rowV)) continue;
+          if (!guidV) continue;
           if (processedThisCycle[guidV]) continue;
 
           var cardTimestampV = getTimestamp(rowV);
@@ -433,10 +444,10 @@ function hasGenuinelyNewItems() {
   var rows = getAllMessageRows();
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
+    var guid = getGuid(row);
+    if (guid) reconcileRowGuid(row, guid);
     if (row.hasAttribute(PROCESSED_ATTR)) continue;
     if (!isComment(row)) continue;
-
-    var guid = getGuid(row);
     if (!guid) continue;
 
     // Already in our action cache → recycled DOM, not new
@@ -594,4 +605,3 @@ function startPolling() {
     }
   }, POLL_INTERVAL);
 }
-

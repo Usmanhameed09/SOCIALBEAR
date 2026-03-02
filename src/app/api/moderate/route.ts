@@ -21,9 +21,15 @@ function checkRateLimit(userId: string): boolean {
 }
 
 // Build the GPT-4o system prompt from enabled categories
-function buildModerationPrompt(categories: Array<{ key: string; label: string; description: string }>) {
+function buildModerationPrompt(
+  categories: Array<{ key: string; label: string; description: string; confidence_threshold?: number }>,
+  defaultThreshold: number
+) {
   const categoryList = categories
-    .map((c) => `- "${c.key}": ${c.label} — ${c.description}`)
+    .map((c) => {
+      const threshold = c.confidence_threshold ?? defaultThreshold;
+      return `- "${c.key}": ${c.label} — ${c.description} (threshold: ${threshold})`;
+    })
     .join("\n");
 
   return `You are a content moderation AI. Analyze the given social media comment and classify it against these moderation categories:
@@ -35,7 +41,15 @@ For EACH category, output a confidence score between 0.0 and 1.0.
 - 0.5 = possibly matches
 - 1.0 = definitely matches
 
-Also determine the single highest-risk category and whether the overall message should be flagged.
+Flagging policy:
+- Compute "flagged" as TRUE if ANY category score is >= that category's threshold.
+- Otherwise "flagged" is FALSE.
+
+Also determine the single highest-risk category:
+- If flagged=true, pick the category with the highest score among those that met threshold.
+- If flagged=false, pick the category with the highest score overall.
+
+Your "reason" MUST be consistent with the values above. If flagged=true, the reason must explain why it warrants flagging based on triggered categories.
 
 Respond ONLY in this exact JSON format, no other text:
 {
@@ -62,7 +76,13 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { message_text, message_id, platform } = body;
+    const { message_text, message_id, platform, skip_keyword, force_ai } = body as {
+      message_text?: string;
+      message_id?: string;
+      platform?: string;
+      skip_keyword?: boolean;
+      force_ai?: boolean;
+    };
 
     if (!message_text) {
       return NextResponse.json({ error: "message_text is required" }, { status: 400 });
@@ -96,45 +116,49 @@ export async function POST(req: NextRequest) {
       .eq("is_active", true);
 
     // ===== 1. KEYWORD CHECK (instant) =====
-    const lowerText = message_text.toLowerCase();
-    const matchedKeyword = keywords?.find((k: { keyword: string }) =>
-      lowerText.includes(k.keyword.toLowerCase())
-    );
+    if (!skip_keyword) {
+      const lowerText = message_text.toLowerCase();
+      const matchedKeyword = keywords?.find((k: { keyword: string }) =>
+        lowerText.includes(k.keyword.toLowerCase())
+      );
 
-    if (matchedKeyword) {
-      const wantsHide =
-        (matchedKeyword.action === "auto_hide" || matchedKeyword.action === "both") &&
-        config.auto_hide_enabled &&
-        !config.dry_run_mode;
-      const action = wantsHide ? "hide" : "badge";
-      const should_complete = !!(config.auto_complete_enabled && !config.dry_run_mode);
+      if (matchedKeyword) {
+        const wantsHide =
+          (matchedKeyword.action === "auto_hide" || matchedKeyword.action === "both") &&
+          config.auto_hide_enabled &&
+          !config.dry_run_mode;
+        const action = wantsHide ? "hide" : "badge";
+        const should_complete = !!(config.auto_complete_enabled && !config.dry_run_mode);
 
-      const { data: inserted } = await supabase
-        .from("moderation_logs")
-        .insert({
-          user_id: user.id,
-          message_text: message_text.substring(0, 500),
-          message_id: message_id || null,
-          platform: platform || "unknown",
-          classification: {},
-          matched_keyword: matchedKeyword.keyword,
-          action_taken: action === "hide" ? "hidden" : "flagged",
-          confidence: 1.0,
-          rule_triggered: `keyword:${matchedKeyword.keyword}`,
-        })
-        .select("id")
-        .single();
+        const { data: inserted } = await supabase
+          .from("moderation_logs")
+          .insert({
+            user_id: user.id,
+            message_text: message_text.substring(0, 500),
+            message_id: message_id || null,
+            platform: platform || "unknown",
+            classification: {},
+            matched_keyword: matchedKeyword.keyword,
+            action_taken: "flagged",
+            confidence: 1.0,
+            rule_triggered: `keyword:${matchedKeyword.keyword}`,
+          })
+          .select("id")
+          .single();
 
-      return NextResponse.json({
-        categories: {},
-        scores: {},
-        flagged: true,
-        action,
-        should_complete,
-        matched_keyword: matchedKeyword.keyword,
-        confidence: 1.0,
-        log_id: inserted?.id || null,
-      });
+        if (!force_ai) {
+          return NextResponse.json({
+            categories: {},
+            scores: {},
+            flagged: true,
+            action,
+            should_complete,
+            matched_keyword: matchedKeyword.keyword,
+            confidence: 1.0,
+            log_id: inserted?.id || null,
+          });
+        }
+      }
     }
 
     // ===== 2. AI MODERATION =====
@@ -149,7 +173,7 @@ export async function POST(req: NextRequest) {
       ? categories
       : getDefaultCategories();
 
-    const systemPrompt = buildModerationPrompt(activeCats);
+    const systemPrompt = buildModerationPrompt(activeCats, config.confidence_threshold);
 
     let aiResult: {
       flagged: boolean;
@@ -207,6 +231,7 @@ export async function POST(req: NextRequest) {
           message_id: message_id || null,
           platform: platform || "unknown",
           classification: { error: "API failed" },
+          ai_message: null,
           action_taken: "none",
           confidence: 0,
           rule_triggered: "ai:error",
@@ -268,6 +293,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const triggered = Object.entries(aiResult.scores || {})
+      .map(([key, score]) => {
+        const cat = activeCats.find((c: { key: string; confidence_threshold?: number }) => c.key === key);
+        const threshold = cat?.confidence_threshold ?? config.confidence_threshold;
+        return { key, score, threshold, hit: score >= threshold };
+      })
+      .filter((x) => x.hit)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+
+    const aiMessage = flagged
+      ? `Flagged (${aiResult.highest_category || ""} ${(aiResult.highest_score || 0).toFixed(2)}). Triggered: ${triggered
+          .map((t) => `${t.key} ${(t.score * 100).toFixed(0)}%`)
+          .join(", ")}.${aiResult.flagged ? ` ${aiResult.reason || ""}` : ""}`.trim()
+      : `Not flagged (${aiResult.highest_category || ""} ${(aiResult.highest_score || 0).toFixed(2)}). ${aiResult.reason || ""}`.trim();
+
     // Log
     const { data: insertedAi } = await supabase
       .from("moderation_logs")
@@ -277,7 +318,8 @@ export async function POST(req: NextRequest) {
         message_id: message_id || null,
         platform: platform || "unknown",
         classification: aiResult.scores || {},
-        action_taken: action === "hide" ? "hidden" : flagged ? "flagged" : "none",
+        ai_message: aiMessage.substring(0, 2000) || null,
+        action_taken: flagged ? "flagged" : "none",
         confidence: aiResult.highest_score || 0,
         rule_triggered: flagged ? `ai:${aiResult.highest_category}` : null,
       })

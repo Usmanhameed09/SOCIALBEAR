@@ -20,6 +20,8 @@ async function fetchLastCheckedTimestamp() {
       console.log("[SproutMod][TS] Server last_checked_timestamp:", raw, "→", num);
       if (num > 9999999999) {
         console.warn("[SproutMod][TS] last_checked_timestamp looks like milliseconds (expected seconds):", num);
+        num = Math.floor(num / 1000);
+        console.log("[SproutMod][TS] Normalized last_checked_timestamp to seconds:", num);
       }
 
       resolve(num);

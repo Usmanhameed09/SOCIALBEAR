@@ -19,8 +19,86 @@ const PLATFORMS = ["all", "facebook", "instagram", "twitter", "youtube", "tiktok
 const ACTIONS = ["all", "flagged", "hidden", "completed", "none"];
 const PAGE_SIZE = 20;
 
+type DisplayLog = ModerationLog & { actions: ModerationLog["action_taken"][] };
+
+const actionPriority: Record<ModerationLog["action_taken"], number> = {
+  none: 0,
+  flagged: 1,
+  hidden: 2,
+  completed: 3,
+};
+
+const ACTION_ORDER: ModerationLog["action_taken"][] = ["flagged", "hidden", "completed", "none"];
+
+function mergeLogs(rows: ModerationLog[]): DisplayLog[] {
+  const groups = new Map<string, ModerationLog[]>();
+
+  for (const row of rows) {
+    const key = row.message_id ? row.message_id : row.id;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(row);
+    } else {
+      groups.set(key, [row]);
+    }
+  }
+
+  const merged: DisplayLog[] = [];
+
+  for (const group of groups.values()) {
+    const sorted = [...group].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    const latest = sorted[0];
+
+    let bestAction = latest.action_taken;
+    for (const row of sorted) {
+      if (actionPriority[row.action_taken] > actionPriority[bestAction]) {
+        bestAction = row.action_taken;
+      }
+    }
+
+    const actionSet = new Set<ModerationLog["action_taken"]>(sorted.map((r) => r.action_taken));
+    if (actionSet.size > 1) actionSet.delete("none");
+    const actions = ACTION_ORDER.filter((a) => actionSet.has(a));
+
+    const ruleSource =
+      sorted.find((row) => !!row.matched_keyword) ??
+      sorted.find((row) => !!row.rule_triggered && !row.rule_triggered.startsWith("ui:")) ??
+      latest;
+
+    merged.push({
+      ...ruleSource,
+      id: latest.id,
+      created_at: latest.created_at,
+      platform: latest.platform,
+      message_id: latest.message_id,
+      message_text: latest.message_text,
+      action_taken: bestAction,
+      actions: actions.length > 0 ? actions : ["none"],
+    });
+  }
+
+  return merged.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+}
+
+function getRuleLabel(log: ModerationLog): string {
+  if (log.matched_keyword) return log.matched_keyword;
+
+  const rule = log.rule_triggered || "";
+  if (!rule) return "AI";
+
+  if (rule.startsWith("keyword:")) return rule.slice("keyword:".length);
+  if (rule.startsWith("ai:")) return rule.slice("ai:".length);
+  if (rule.startsWith("ui:")) return "—";
+
+  return rule;
+}
+
 export default function LogsPage() {
-  const [logs, setLogs] = useState<ModerationLog[]>([]);
+  const [logs, setLogs] = useState<DisplayLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
@@ -28,6 +106,12 @@ export default function LogsPage() {
   const [action, setAction] = useState("all");
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
+  const [aiMessageModal, setAiMessageModal] = useState<{
+    ai_message: string;
+    message_text: string;
+    created_at: string;
+    platform: string;
+  } | null>(null);
   const supabase = createClient();
 
   const fetchLogs = useCallback(async () => {
@@ -35,27 +119,32 @@ export default function LogsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
     let query = supabase
       .from("moderation_logs")
-      .select("*", { count: "exact" })
+      .select("*")
       .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+      .order("created_at", { ascending: false });
 
     if (platform !== "all") query = query.eq("platform", platform);
-    if (action !== "all") query = query.eq("action_taken", action);
     if (search) query = query.ilike("message_text", `%${search}%`);
 
-    const { data, count } = await query;
+    const { data } = await query;
 
-    if (data) {
-      setLogs(data as ModerationLog[]);
-    }
-    if (count !== null) setTotal(count);
+    const merged = mergeLogs((data || []) as ModerationLog[]);
+    const filtered =
+      action === "all"
+        ? merged
+        : merged.filter((row) => row.actions.includes(action as ModerationLog["action_taken"]));
+
+    setLogs(filtered);
+    setTotal(filtered.length);
     setLoading(false);
-  }, [supabase, page, platform, action, search]);
+  }, [supabase, platform, action, search]);
 
   useEffect(() => {
     fetchLogs();
@@ -81,11 +170,15 @@ export default function LogsPage() {
         .order("created_at", { ascending: false });
 
       if (platform !== "all") query = query.eq("platform", platform);
-      if (action !== "all") query = query.eq("action_taken", action);
       if (search) query = query.ilike("message_text", `%${search}%`);
 
       const { data } = await query;
-      if (!data || data.length === 0) return;
+      const merged = mergeLogs((data || []) as ModerationLog[]);
+      const filtered =
+        action === "all"
+          ? merged
+          : merged.filter((row) => row.actions.includes(action as ModerationLog["action_taken"]));
+      if (filtered.length === 0) return;
 
       const columns: (keyof ModerationLog)[] = [
         "id",
@@ -95,6 +188,7 @@ export default function LogsPage() {
         "confidence",
         "matched_keyword",
         "rule_triggered",
+        "ai_message",
         "action_taken",
       ];
 
@@ -109,7 +203,7 @@ export default function LogsPage() {
       };
 
       const header = columns.join(",");
-      const rows = data.map((row) =>
+      const rows = filtered.map((row) =>
         columns.map((col) => escapeCell(row[col])).join(",")
       );
       const csv = [header, ...rows].join("\n");
@@ -127,6 +221,7 @@ export default function LogsPage() {
   }, [supabase, platform, action, search]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+  const pageLogs = logs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const actionColors: Record<string, string> = {
     hidden: "bg-danger-50 text-danger-600",
@@ -209,7 +304,7 @@ export default function LogsPage() {
       </div>
 
       {/* Table */}
-      {logs.length === 0 && !loading ? (
+      {pageLogs.length === 0 && !loading ? (
         <div className="bg-white rounded-2xl border border-surface-200/80 p-12 text-center">
           <ScrollText className="w-10 h-10 text-surface-300 mx-auto mb-3" />
           <p className="text-surface-500 text-sm">
@@ -238,12 +333,15 @@ export default function LogsPage() {
                     Rule
                   </th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-surface-500 uppercase tracking-wider">
+                    AI Message
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-surface-500 uppercase tracking-wider">
                     Action
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
-                {logs.map((log) => (
+                {pageLogs.map((log) => (
                   <tr
                     key={log.id}
                     className="hover:bg-surface-50/50 transition-colors"
@@ -252,7 +350,25 @@ export default function LogsPage() {
                       {format(new Date(log.created_at), "MMM d, HH:mm:ss")}
                     </td>
                     <td className="px-4 py-3 max-w-xs truncate text-surface-700">
-                      {log.message_text || "—"}
+                      {log.message_text ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAiMessageModal({
+                              ai_message: log.ai_message || "",
+                              message_text: log.message_text || "",
+                              created_at: log.created_at,
+                              platform: log.platform,
+                            })
+                          }
+                          className="text-left w-full truncate hover:underline text-surface-700"
+                          title="Click to view full message"
+                        >
+                          {log.message_text}
+                        </button>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span className="px-2 py-0.5 bg-surface-100 rounded text-xs font-medium text-surface-600 capitalize">
@@ -278,21 +394,47 @@ export default function LogsPage() {
                         <span className="px-2 py-0.5 bg-purple-50 text-purple-600 rounded font-mono">
                           {log.matched_keyword}
                         </span>
-                      ) : log.rule_triggered ? (
-                        log.rule_triggered
                       ) : (
-                        "AI"
+                        getRuleLabel(log)
+                      )}
+                    </td>
+                    <td
+                      className="px-4 py-3 max-w-sm truncate text-surface-500"
+                    >
+                      {log.ai_message ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAiMessageModal({
+                              ai_message: log.ai_message || "",
+                              message_text: log.message_text || "",
+                              created_at: log.created_at,
+                              platform: log.platform,
+                            })
+                          }
+                          className="text-left w-full truncate hover:underline"
+                          title="Click to view full message"
+                        >
+                          {log.ai_message}
+                        </button>
+                      ) : (
+                        "—"
                       )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <span
-                        className={clsx(
-                          "px-2 py-0.5 rounded text-xs font-medium capitalize",
-                          actionColors[log.action_taken] || actionColors.none
-                        )}
-                      >
-                        {log.action_taken}
-                      </span>
+                    <div className="flex flex-wrap gap-1">
+                      {log.actions.map((a) => (
+                        <span
+                          key={a}
+                          className={clsx(
+                            "px-2 py-0.5 rounded text-xs font-medium capitalize",
+                            actionColors[a] || actionColors.none
+                          )}
+                        >
+                          {a}
+                        </span>
+                      ))}
+                    </div>
                     </td>
                   </tr>
                 ))}
@@ -324,6 +466,53 @@ export default function LogsPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {aiMessageModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setAiMessageModal(null);
+          }}
+        >
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="relative w-full max-w-2xl rounded-2xl bg-white shadow-xl border border-surface-200 overflow-hidden">
+            <div className="flex items-start justify-between gap-4 p-5 border-b border-surface-100">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-surface-900">
+                  AI Message
+                </div>
+                <div className="mt-1 text-xs text-surface-500">
+                  {format(new Date(aiMessageModal.created_at), "MMM d, HH:mm:ss")} ·{" "}
+                  <span className="capitalize">{aiMessageModal.platform}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiMessageModal(null)}
+                className="shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium text-surface-600 hover:bg-surface-100"
+              >
+                Close
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="text-xs font-semibold text-surface-500 uppercase tracking-wider">
+                Original Message
+              </div>
+              <div className="text-sm text-surface-800 whitespace-pre-wrap break-words bg-surface-50 border border-surface-200 rounded-xl p-4 max-h-40 overflow-auto">
+                {aiMessageModal.message_text || "—"}
+              </div>
+              <div className="text-xs font-semibold text-surface-500 uppercase tracking-wider">
+                AI Response
+              </div>
+              <div className="text-sm text-surface-800 whitespace-pre-wrap break-words bg-surface-50 border border-surface-200 rounded-xl p-4 max-h-[50vh] overflow-auto">
+                {aiMessageModal.ai_message || "—"}
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

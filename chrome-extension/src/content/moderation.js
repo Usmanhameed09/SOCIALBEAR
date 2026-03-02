@@ -32,8 +32,10 @@ async function processRow(row) {
   console.log("[SproutMod] Processing [" + platform + "/" + msgType + "] \"" + text.substring(0, 50) + "\" " + guid);
 
   // ---------- KEYWORD CHECK ----------
+  var kwMatch = null;
   if (config && config.keywords && config.keywords.length > 0) {
     var lower = text.toLowerCase();
+    keywordLoop:
     for (var i = 0; i < config.keywords.length; i++) {
       var kw = config.keywords[i];
       if (lower.indexOf(kw.keyword.toLowerCase()) !== -1) {
@@ -46,7 +48,7 @@ async function processRow(row) {
         if (kwActions.indexOf("both") !== -1) { doBadge = true; doAutoHide = true; }
 
         var willAutoHide = doAutoHide || (doBadge && !!config.auto_hide_enabled);
-        var willComplete = doComplt || (doBadge && !!config.auto_complete_enabled);
+        var willComplete = doComplt;
 
         console.log("[SproutMod] KW MATCH: \"" + kw.keyword + "\" → badge:" + doBadge + " hide:" + willAutoHide + " complete:" + willComplete);
 
@@ -59,34 +61,39 @@ async function processRow(row) {
           var hidden = await hideWithRetry(row);
           if (hidden) { result.hidden = true; }
           await sleep(300 + Math.random() * 200);
+          result.flagged = true;
         }
 
-        if (willComplete) {
-          var completed = await doComplete(row);
-          if (completed) { result.completed = true; }
-        }
-
-        var actionTaken = result.hidden ? "hidden" : (result.completed ? "completed" : "flagged");
-        row.setAttribute(PROCESSED_ATTR, "done-kw-" + rawAction.replace(/,/g, "-"));
-        recordAction(guid, { action: actionTaken, category: kw.keyword, confidence: 1.0, keyword: kw.keyword });
-
-        if (willAutoHide && !doBadge) { result.flagged = true; }
+        kwMatch = { keyword: kw.keyword, rawAction: rawAction, pendingComplete: willComplete, didBadge: doBadge, didAutoHide: willAutoHide };
 
         try {
           if (doBadge || willAutoHide) {
             chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: {
               message_id: guid, message_text: text, platform: platform,
-              action_taken: result.hidden ? "hidden" : "flagged", source: "keyword"
-            }});
+              action_taken: "flagged", source: "keyword"
+            }}, function (resp) {
+              if (chrome.runtime.lastError) {
+                console.warn("[SproutMod] Log update failed:", chrome.runtime.lastError.message);
+              } else if (resp && resp.success === false) {
+                console.warn("[SproutMod] Log update failed:", resp.error || "API error");
+              }
+            });
           }
-          if (result.completed) {
+          if (result.hidden) {
             chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: {
               message_id: guid, message_text: text, platform: platform,
-              action_taken: "completed", source: "keyword"
-            }});
+              action_taken: "hidden", source: "keyword"
+            }}, function (resp) {
+              if (chrome.runtime.lastError) {
+                console.warn("[SproutMod] Log update failed:", chrome.runtime.lastError.message);
+              } else if (resp && resp.success === false) {
+                console.warn("[SproutMod] Log update failed:", resp.error || "API error");
+              }
+            });
           }
         } catch (_) {}
-        return result;
+
+        break keywordLoop;
       }
     }
   }
@@ -96,7 +103,7 @@ async function processRow(row) {
 
   var aiResult = await new Promise(function (resolve) {
     chrome.runtime.sendMessage(
-      { type: "MODERATE_TEXT", data: { text: text, messageId: guid, platform: platform } },
+      { type: "MODERATE_TEXT", data: { text: text, messageId: guid, platform: platform, skipKeyword: !!kwMatch } },
       function (response) {
         if (chrome.runtime.lastError) {
           console.warn("[SproutMod] Runtime error:", chrome.runtime.lastError.message);
@@ -110,6 +117,27 @@ async function processRow(row) {
 
   if (!aiResult || !aiResult.success) {
     console.warn("[SproutMod] API error:", aiResult && aiResult.error);
+    if (kwMatch) {
+      if (kwMatch.pendingComplete && !result.completed) {
+        var completedKwErr = await doComplete(row);
+        if (completedKwErr) { result.completed = true; }
+      }
+
+      var actionTakenErr = result.hidden ? "hidden" : (result.completed ? "completed" : "flagged");
+      row.setAttribute(PROCESSED_ATTR, "done-kw-" + kwMatch.rawAction.replace(/,/g, "-"));
+      recordAction(guid, { action: actionTakenErr, category: kwMatch.keyword, confidence: 1.0, keyword: kwMatch.keyword });
+
+      if (result.completed) {
+        try {
+          chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: {
+            message_id: guid, message_text: text, platform: platform,
+            action_taken: "completed", source: "keyword"
+          }});
+        } catch (_) {}
+      }
+      return result;
+    }
+
     row.setAttribute(PROCESSED_ATTR, "error");
     recordAction(guid, { action: "clean" });
     return result;
@@ -123,7 +151,7 @@ async function processRow(row) {
     var conf = aiData.confidence || 0.5;
 
     var shouldHide = !!(config && config.auto_hide_enabled) && (aiData.action === "hide");
-    var shouldComplete = !!(config && config.auto_complete_enabled) && !!aiData.should_complete;
+    var shouldComplete = !!aiData.should_complete;
 
     console.log("[SproutMod] AI FLAGGED:", cat, Math.round(conf * 100) + "%", guid,
       "→ action:" + (aiData.action || "") + " hide:" + shouldHide + " complete:" + shouldComplete);
@@ -152,20 +180,63 @@ async function processRow(row) {
     recordAction(guid, { action: aiAction, category: cat, confidence: conf, keyword: null });
 
     try {
-      var payload = { message_id: guid, platform: platform, action_taken: aiAction, category: cat, confidence: conf, source: "ai" };
+      var payload = { message_id: guid, message_text: text, platform: platform, action_taken: "flagged", category: cat, confidence: conf, source: "ai" };
       if (aiResult.data && aiResult.data.log_id) payload.log_id = aiResult.data.log_id;
-      chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: payload });
-      if (result.completed) {
+      chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: payload }, function (resp) {
+        if (chrome.runtime.lastError) {
+          console.warn("[SproutMod] Log update failed:", chrome.runtime.lastError.message);
+        } else if (resp && resp.success === false) {
+          console.warn("[SproutMod] Log update failed:", resp.error || "API error");
+        }
+      });
+      if (aiAction === "hidden") {
         chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: {
           message_id: guid, message_text: text, platform: platform,
-          action_taken: "completed", source: "ai"
-        }});
+          action_taken: "hidden", source: "ai"
+        }}, function (resp) {
+          if (chrome.runtime.lastError) {
+            console.warn("[SproutMod] Log update failed:", chrome.runtime.lastError.message);
+          } else if (resp && resp.success === false) {
+            console.warn("[SproutMod] Log update failed:", resp.error || "API error");
+          }
+        });
       }
     } catch (_) {}
   } else {
-    console.log("[SproutMod] Clean:", guid);
-    row.setAttribute(PROCESSED_ATTR, "done-clean");
-    recordAction(guid, { action: "clean" });
+    if (kwMatch) {
+      console.log("[SproutMod] AI Clean (KW preserved):", guid);
+    } else {
+      console.log("[SproutMod] Clean:", guid);
+      row.setAttribute(PROCESSED_ATTR, "done-clean");
+      recordAction(guid, { action: "clean" });
+    }
+  }
+
+  if (kwMatch && kwMatch.pendingComplete && !result.completed) {
+    var completedKw = await doComplete(row);
+    if (completedKw) { result.completed = true; }
+  }
+
+  if (kwMatch && !aiData.flagged) {
+    var actionTaken = result.hidden ? "hidden" : (result.completed ? "completed" : "flagged");
+    row.setAttribute(PROCESSED_ATTR, "done-kw-" + kwMatch.rawAction.replace(/,/g, "-"));
+    recordAction(guid, { action: actionTaken, category: kwMatch.keyword, confidence: 1.0, keyword: kwMatch.keyword });
+  }
+
+  if (result.completed) {
+    try {
+      var completedSource = kwMatch && !aiData.flagged ? "keyword" : "ai";
+      chrome.runtime.sendMessage({ type: "UPDATE_LOG", data: {
+        message_id: guid, message_text: text, platform: platform,
+        action_taken: "completed", source: completedSource
+      }}, function (resp) {
+        if (chrome.runtime.lastError) {
+          console.warn("[SproutMod] Log update failed:", chrome.runtime.lastError.message);
+        } else if (resp && resp.success === false) {
+          console.warn("[SproutMod] Log update failed:", resp.error || "API error");
+        }
+      });
+    } catch (_) {}
   }
 
   return result;

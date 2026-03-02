@@ -13,6 +13,8 @@ async function handleModeration(data) {
         message_text: data.text,
         message_id: data.messageId,
         platform: data.platform || "unknown",
+        skip_keyword: !!data.skipKeyword,
+        force_ai: !!data.forceAi,
       }),
     });
 

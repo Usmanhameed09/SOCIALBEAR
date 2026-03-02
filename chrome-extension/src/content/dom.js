@@ -18,7 +18,9 @@ function getGuid(row) {
 function getText(row) {
   var el = row.querySelector("[data-qa-message-text]");
   if (!el) return "";
-  return el.getAttribute("data-qa-message-text") || "";
+  var attr = el.getAttribute("data-qa-message-text") || "";
+  if (attr && attr.trim()) return attr.trim();
+  return (el.textContent || "").trim();
 }
 
 function isSent(row) {
@@ -29,7 +31,7 @@ function isSent(row) {
 function getPlatform(row) {
   var el = row.querySelector("[data-qa-message-network]");
   if (!el) return "unknown";
-  var net = el.getAttribute("data-qa-message-network") || "unknown";
+  var net = (el.getAttribute("data-qa-message-network") || "unknown").toLowerCase();
   var map = {
     facebook: "facebook",
     fb_instagram_account: "instagram",
@@ -39,7 +41,10 @@ function getPlatform(row) {
     threads: "threads",
     linkedin: "linkedin"
   };
-  return map[net] || net;
+  if (map[net]) return map[net];
+  if (net.indexOf("threads") !== -1) return "threads";
+  if (net.indexOf("twitter") !== -1 || net === "x") return "twitter";
+  return net;
 }
 
 function getMsgType(row) {
@@ -48,7 +53,18 @@ function getMsgType(row) {
 }
 function isComment(row) {
   var t = (getMsgType(row) || "").toLowerCase();
-  return t.indexOf("comment") !== -1;
+  if (t.indexOf("comment") !== -1) return true;
+  if (t.indexOf("threads_") !== -1) {
+    if (t.indexOf("reply") !== -1) return true;
+    if (t.indexOf("mention") !== -1) return true;
+  }
+
+  var platform = (getPlatform(row) || "").toLowerCase();
+  if (platform === "twitter" || platform === "threads") {
+    if (t.indexOf("mention") !== -1) return true;
+    if (t.indexOf("reply") !== -1) return true;
+  }
+  return false;
 }
 
 function sleep(ms) {

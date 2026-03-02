@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { log_id, action_taken, message_id, message_text, platform } = body;
+    const { log_id, action_taken, message_id, message_text, platform, ai_message } = body;
 
     if (!action_taken) {
       return NextResponse.json({ error: "action_taken required" }, { status: 400 });
@@ -28,9 +28,20 @@ export async function POST(req: NextRequest) {
 
     // If log_id provided, update existing entry
     if (log_id) {
+      const updatePayload: Record<string, unknown> = { action_taken };
+      if (typeof message_text === "string") {
+        updatePayload.message_text = message_text.substring(0, 500);
+      }
+      if (typeof platform === "string") {
+        updatePayload.platform = platform || "unknown";
+      }
+      if (typeof ai_message === "string") {
+        updatePayload.ai_message = ai_message.substring(0, 2000);
+      }
+
       const { error } = await supabase
         .from("moderation_logs")
-        .update({ action_taken })
+        .update(updatePayload)
         .eq("id", log_id)
         .eq("user_id", user.id);
 
@@ -46,6 +57,7 @@ export async function POST(req: NextRequest) {
           .select("id, action_taken")
           .eq("user_id", user.id)
           .eq("message_id", message_id)
+          .neq("action_taken", "completed")
           .order("created_at", { ascending: false })
           .limit(1);
 
@@ -78,6 +90,7 @@ export async function POST(req: NextRequest) {
           message_id: message_id || null,
           platform: platform || "unknown",
           classification: {},
+          ai_message: typeof ai_message === "string" ? ai_message.substring(0, 2000) : null,
           matched_keyword: null,
           action_taken: action_taken,
           confidence: 0,
